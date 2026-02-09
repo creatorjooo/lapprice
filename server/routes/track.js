@@ -99,13 +99,22 @@ router.get('/stats', (req, res) => {
     const byPlatform = {};
     const bySource = {};
     const byDay = {};
+    const byHour = {};
     const productClicks = {};
+
+    // 시간대별 초기화 (0~23)
+    for (let h = 0; h < 24; h++) {
+      byHour[h] = 0;
+    }
 
     entries.forEach((e) => {
       byPlatform[e.platform] = (byPlatform[e.platform] || 0) + 1;
       bySource[e.source] = (bySource[e.source] || 0) + 1;
       const day = e.timestamp.split('T')[0];
       byDay[day] = (byDay[day] || 0) + 1;
+      // 시간대별 집계
+      const hour = new Date(e.timestamp).getHours();
+      byHour[hour] = (byHour[hour] || 0) + 1;
       const key = e.productId || e.productName;
       if (key) {
         productClicks[key] = (productClicks[key] || 0) + 1;
@@ -119,21 +128,56 @@ router.get('/stats', (req, res) => {
 
     const now = new Date();
     const todayStr = now.toISOString().split('T')[0];
+    const yesterdayDate = new Date(now);
+    yesterdayDate.setDate(yesterdayDate.getDate() - 1);
+    const yesterdayStr = yesterdayDate.toISOString().split('T')[0];
     const sevenDaysAgo = new Date(now);
     sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+    const fourteenDaysAgo = new Date(now);
+    fourteenDaysAgo.setDate(fourteenDaysAgo.getDate() - 14);
 
     const todayClicks = entries.filter((e) => e.timestamp.startsWith(todayStr)).length;
+    const yesterdayClicks = entries.filter((e) => e.timestamp.startsWith(yesterdayStr)).length;
     const weekClicks = entries.filter((e) => new Date(e.timestamp) >= sevenDaysAgo).length;
+
+    // 이전 기간 비교 (전주 클릭)
+    const allEntries = lines
+      .map((line) => { try { return JSON.parse(line); } catch { return null; } })
+      .filter(Boolean);
+    const prevWeekClicks = allEntries.filter((e) => {
+      const d = new Date(e.timestamp);
+      return d >= fourteenDaysAgo && d < sevenDaysAgo;
+    }).length;
+
+    // 추정 수익: 클릭 x 전환율(3%) x 평균단가(150만원) x 커미션(3%)
+    const AVG_CONVERSION = 0.03;
+    const AVG_PRICE = 1500000;
+    const AVG_COMMISSION = 0.03;
+    const estimatedRevenue = Math.round(entries.length * AVG_CONVERSION * AVG_PRICE * AVG_COMMISSION);
+    const todayRevenue = Math.round(todayClicks * AVG_CONVERSION * AVG_PRICE * AVG_COMMISSION);
+    const weekRevenue = Math.round(weekClicks * AVG_CONVERSION * AVG_PRICE * AVG_COMMISSION);
 
     res.json({
       totalClicks: entries.length,
       todayClicks,
+      yesterdayClicks,
       weekClicks,
       period: `${days}일`,
       byPlatform,
       bySource,
       byDay,
+      byHour,
       topProducts,
+      previousPeriod: {
+        weekClicks: prevWeekClicks,
+        weekChange: prevWeekClicks > 0 ? Math.round(((weekClicks - prevWeekClicks) / prevWeekClicks) * 100) : 0,
+        todayVsYesterday: yesterdayClicks > 0 ? Math.round(((todayClicks - yesterdayClicks) / yesterdayClicks) * 100) : 0,
+      },
+      estimatedRevenue: {
+        total: estimatedRevenue,
+        today: todayRevenue,
+        week: weekRevenue,
+      },
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
