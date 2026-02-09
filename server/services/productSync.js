@@ -1,0 +1,694 @@
+/**
+ * 상품 자동 동기화 서비스
+ * 
+ * 역할:
+ * 1. 네이버 쇼핑 API에서 카테고리별 인기 상품을 주기적으로 수집
+ * 2. 수집된 상품의 가격을 실시간으로 업데이트
+ * 3. 신제품 자동 추가
+ * 4. 가격 변동 히스토리 기록
+ * 5. 쿠팡 어필리에이트 링크 자동 생성
+ * 
+ * 흐름: 네이버API → 정규화 → JSON 카탈로그 저장 → 프론트엔드 API 서빙
+ */
+
+const fs = require('fs');
+const path = require('path');
+const { stripHtml, delay } = require('../utils/helpers');
+
+const AFFILIATE_LINKS_PATH = path.join(__dirname, '..', 'config', 'affiliate-links.json');
+
+const CATALOG_DIR = path.join(__dirname, '..', 'data', 'catalog');
+const PRICE_HISTORY_DIR = path.join(__dirname, '..', 'data', 'catalog', 'history');
+
+// 카테고리별 검색 키워드 (네이버 쇼핑 API용)
+const SEARCH_QUERIES = {
+  laptop: [
+    { query: '게이밍 노트북', category: 'gaming', display: 30 },
+    { query: '울트라북 노트북', category: 'ultrabook', display: 20 },
+    { query: '비즈니스 노트북', category: 'business', display: 20 },
+    { query: '영상편집 노트북', category: 'creator', display: 20 },
+    { query: '가성비 노트북', category: 'budget', display: 20 },
+    { query: '맥북', category: 'ultrabook', display: 15 },
+    { query: '노트북 신제품 2025', category: 'budget', display: 15 },
+    { query: '노트북 신제품 2026', category: 'budget', display: 15 },
+  ],
+  monitor: [
+    { query: '게이밍 모니터 144hz', category: 'gaming', display: 25 },
+    { query: '4K 모니터', category: 'professional', display: 20 },
+    { query: '울트라와이드 모니터', category: 'ultrawide', display: 15 },
+    { query: 'OLED 모니터', category: 'gaming', display: 15 },
+    { query: '가성비 모니터 IPS', category: 'general', display: 20 },
+    { query: 'USB-C 모니터', category: 'professional', display: 15 },
+  ],
+  desktop: [
+    { query: '게이밍 데스크탑 PC', category: 'gaming', display: 25 },
+    { query: '미니PC', category: 'minipc', display: 20 },
+    { query: '맥미니 M4', category: 'minipc', display: 10 },
+    { query: 'iMac', category: 'allinone', display: 10 },
+    { query: '사무용 데스크탑', category: 'office', display: 15 },
+    { query: '조립 PC 완제품', category: 'gaming', display: 15 },
+  ],
+};
+
+// 제품 타입별 가격 범위 (노이즈 필터링)
+const PRICE_RANGES = {
+  laptop: { min: 300000, max: 8000000 },
+  monitor: { min: 80000, max: 5000000 },
+  desktop: { min: 200000, max: 10000000 },
+};
+
+// 제외 키워드 (악세서리, 부품 등 필터링)
+const EXCLUDE_KEYWORDS = [
+  '케이스', '가방', '파우치', '스킨', '필름', '보호', '스탠드', '거치대',
+  '키보드', '마우스', '충전기', '어댑터', '케이블', '허브', 'USB',
+  '메모리', 'RAM', 'SSD', 'HDD', '하드디스크',
+  '중고', '리퍼', '전시', '반품', '스크래치',
+  '부품', '수리', '교체',
+];
+
+/**
+ * 디렉토리 초기화
+ */
+function ensureDirectories() {
+  [CATALOG_DIR, PRICE_HISTORY_DIR].forEach(dir => {
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+  });
+}
+
+/**
+ * 카탈로그 파일 읽기
+ */
+function loadCatalog(productType) {
+  const filePath = path.join(CATALOG_DIR, `${productType}.json`);
+  try {
+    if (fs.existsSync(filePath)) {
+      return JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+    }
+  } catch (err) {
+    console.error(`[ProductSync] 카탈로그 로드 오류 (${productType}):`, err.message);
+  }
+  return { products: [], lastSync: null, syncCount: 0 };
+}
+
+/**
+ * 카탈로그 파일 저장
+ */
+function saveCatalog(productType, catalogData) {
+  const filePath = path.join(CATALOG_DIR, `${productType}.json`);
+  fs.writeFileSync(filePath, JSON.stringify(catalogData, null, 2), 'utf-8');
+}
+
+/**
+ * 가격 히스토리 기록
+ */
+function recordPriceHistory(productId, price, store) {
+  const today = new Date().toISOString().split('T')[0];
+  const filePath = path.join(PRICE_HISTORY_DIR, `${productId}.json`);
+
+  let history = [];
+  try {
+    if (fs.existsSync(filePath)) {
+      history = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+    }
+  } catch { /* ignore */ }
+
+  // 오늘 날짜에 이미 기록이 있으면 가격이 변동된 경우만 업데이트
+  const todayEntry = history.find(h => h.date === today);
+  if (todayEntry) {
+    if (todayEntry.price !== price) {
+      todayEntry.price = price;
+      todayEntry.store = store;
+    } else {
+      return; // 변동 없으면 스킵
+    }
+  } else {
+    history.push({ date: today, price, store });
+  }
+
+  // 최대 365일치 보관
+  if (history.length > 365) {
+    history = history.slice(-365);
+  }
+
+  fs.writeFileSync(filePath, JSON.stringify(history, null, 2), 'utf-8');
+}
+
+/**
+ * 가격 히스토리 조회
+ */
+function getPriceHistory(productId) {
+  const filePath = path.join(PRICE_HISTORY_DIR, `${productId}.json`);
+  try {
+    if (fs.existsSync(filePath)) {
+      return JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+    }
+  } catch { /* ignore */ }
+  return [];
+}
+
+/**
+ * 네이버 API에서 상품 검색
+ */
+async function fetchFromNaver(query, display = 20) {
+  const clientId = process.env.NAVER_CLIENT_ID;
+  const clientSecret = process.env.NAVER_CLIENT_SECRET;
+
+  if (!clientId || !clientSecret) {
+    return [];
+  }
+
+  try {
+    const url = `https://openapi.naver.com/v1/search/shop.json?query=${encodeURIComponent(query)}&display=${display}&sort=sim`;
+    const response = await fetch(url, {
+      headers: {
+        'X-Naver-Client-Id': clientId,
+        'X-Naver-Client-Secret': clientSecret,
+      },
+    });
+
+    if (!response.ok) {
+      console.error(`[ProductSync] 네이버 API 오류: ${response.status} for "${query}"`);
+      return [];
+    }
+
+    const data = await response.json();
+    return data.items || [];
+  } catch (err) {
+    console.error(`[ProductSync] 네이버 API 요청 실패 (${query}):`, err.message);
+    return [];
+  }
+}
+
+/**
+ * 악세서리/부품 등 제외 필터
+ */
+function isValidProduct(title, productType) {
+  const titleLower = title.toLowerCase();
+  
+  // 제외 키워드 체크
+  for (const keyword of EXCLUDE_KEYWORDS) {
+    if (titleLower.includes(keyword.toLowerCase())) {
+      return false;
+    }
+  }
+
+  // 제품 타입별 필수 키워드 (최소 하나 포함해야 함)
+  const requiredAny = {
+    laptop: ['노트북', 'laptop', '맥북', 'macbook', '그램', 'gram', '갤럭시북', 'thinkpad', '씽크패드', 'zenbook', '제니스', 'ideapad', 'victus', 'omen', 'nitro', 'tuf'],
+    monitor: ['모니터', 'monitor', '디스플레이', 'display'],
+    desktop: ['데스크탑', 'desktop', '미니pc', 'pc', '컴퓨터', 'mac mini', '맥미니', 'imac', '아이맥', '조립', '완제품'],
+  };
+
+  const required = requiredAny[productType] || [];
+  if (required.length > 0) {
+    return required.some(kw => titleLower.includes(kw.toLowerCase()));
+  }
+  return true;
+}
+
+/**
+ * 네이버 API 상품을 우리 형식으로 정규화
+ */
+function normalizeNaverProduct(item, productType, category) {
+  const title = stripHtml(item.title);
+  const price = parseInt(item.lprice, 10) || 0;
+  const originalPrice = parseInt(item.hprice, 10) || price;
+
+  // 고유 ID 생성 (productType + 네이버 상품 ID 또는 타이틀 해시)
+  const naverProductId = item.productId || item.link?.match(/pid=(\d+)/)?.[1] || '';
+  const id = `auto_${productType[0]}${naverProductId || hashString(title)}`;
+
+  const discount = originalPrice > price
+    ? { percent: Math.round(((originalPrice - price) / originalPrice) * 100), amount: originalPrice - price }
+    : { percent: 0, amount: 0 };
+
+  return {
+    id,
+    productType,
+    brand: extractBrand(title, productType),
+    name: cleanProductName(title),
+    model: title,
+    category,
+    prices: {
+      original: originalPrice > price ? originalPrice : price,
+      current: price,
+      lowest: price, // 최초 수집 시 현재가 = 최저가
+      average: price,
+    },
+    discount,
+    priceIndex: 85, // 초기값, 추후 히스토리 기반 계산
+    stores: [
+      {
+        store: item.mallName || '네이버쇼핑',
+        storeLogo: getStoreLogo(item.mallName),
+        price,
+        shipping: 0,
+        deliveryDays: '2~3일',
+        updatedAt: getTimeAgo(),
+        url: item.link || '',
+        isLowest: true,
+      },
+    ],
+    rating: { score: 4.5, count: 0 },
+    reviews: [],
+    stock: 'in',
+    isNew: false,
+    isHot: discount.percent >= 15,
+    releaseDate: new Date().toISOString().slice(0, 7),
+    images: [item.image || ''],
+    tags: extractTags(title, productType),
+    editorScore: undefined,
+    editorPick: undefined,
+    editorComment: undefined,
+    pros: undefined,
+    cons: undefined,
+    bestFor: undefined,
+    // 메타데이터
+    _source: 'naver',
+    _naverProductId: naverProductId,
+    _lastUpdated: new Date().toISOString(),
+    _autoGenerated: true,
+  };
+}
+
+/**
+ * 기존 상품과 병합 (가격 업데이트, 신제품 추가)
+ */
+function mergeProducts(existingProducts, newProducts) {
+  const productMap = new Map();
+
+  // 기존 상품 로드
+  for (const p of existingProducts) {
+    productMap.set(p.id, p);
+  }
+
+  let addedCount = 0;
+  let updatedCount = 0;
+
+  for (const newP of newProducts) {
+    // 이미 존재하는 상품인지 확인 (ID 또는 이름 유사도)
+    const existing = productMap.get(newP.id) || findSimilarProduct(productMap, newP.name);
+
+    if (existing) {
+      // 기존 상품: 가격 업데이트
+      const oldPrice = existing.prices.current;
+      const newPrice = newP.prices.current;
+
+      if (newPrice > 0 && newPrice !== oldPrice) {
+        existing.prices.current = newPrice;
+        existing.prices.lowest = Math.min(existing.prices.lowest, newPrice);
+        
+        // 평균가 갱신 (이동 평균)
+        existing.prices.average = Math.round((existing.prices.average * 0.8) + (newPrice * 0.2));
+        
+        // 할인율 재계산
+        if (existing.prices.original > newPrice) {
+          existing.discount = {
+            percent: Math.round(((existing.prices.original - newPrice) / existing.prices.original) * 100),
+            amount: existing.prices.original - newPrice,
+          };
+        }
+
+        // 가격지수 재계산
+        existing.priceIndex = calculatePriceIndex(newPrice, existing.prices.lowest, existing.prices.average);
+        
+        // HOT 상태 업데이트
+        existing.isHot = existing.discount.percent >= 15 || existing.priceIndex >= 90;
+
+        existing._lastUpdated = new Date().toISOString();
+        updatedCount++;
+
+        // 가격 히스토리 기록
+        recordPriceHistory(existing.id, newPrice, newP.stores[0]?.store || '평균');
+      }
+
+      // 스토어 정보 업데이트/추가
+      mergeStores(existing, newP);
+    } else {
+      // 신제품 추가
+      newP.isNew = true;
+      productMap.set(newP.id, newP);
+      addedCount++;
+
+      // 첫 가격 히스토리 기록
+      recordPriceHistory(newP.id, newP.prices.current, newP.stores[0]?.store || '평균');
+    }
+  }
+
+  return {
+    products: Array.from(productMap.values()),
+    addedCount,
+    updatedCount,
+  };
+}
+
+/**
+ * 스토어 정보 병합
+ */
+function mergeStores(existing, newProduct) {
+  const newStore = newProduct.stores[0];
+  if (!newStore) return;
+
+  const existingStore = existing.stores.find(s => 
+    s.store === newStore.store || s.url === newStore.url
+  );
+
+  if (existingStore) {
+    existingStore.price = newStore.price;
+    existingStore.updatedAt = getTimeAgo();
+    existingStore.isLowest = false;
+  } else {
+    existing.stores.push(newStore);
+  }
+
+  // 최저가 스토어 재계산
+  const lowestStore = existing.stores.reduce((min, s) => s.price < min.price ? s : min, existing.stores[0]);
+  existing.stores.forEach(s => { s.isLowest = s === lowestStore; });
+}
+
+/**
+ * 유사 상품 찾기 (이름 기반 퍼지 매칭)
+ */
+function findSimilarProduct(productMap, newName) {
+  const normalizedNew = normalizeForComparison(newName);
+  for (const [, product] of productMap) {
+    const normalizedExisting = normalizeForComparison(product.name);
+    if (normalizedNew === normalizedExisting) return product;
+    // 80% 이상 유사하면 같은 상품으로 판단
+    if (similarity(normalizedNew, normalizedExisting) > 0.8) return product;
+  }
+  return null;
+}
+
+/**
+ * 비교용 이름 정규화
+ */
+function normalizeForComparison(name) {
+  return name
+    .toLowerCase()
+    .replace(/[^a-z0-9가-힣]/g, '')
+    .replace(/\s+/g, '');
+}
+
+/**
+ * 문자열 유사도 (Jaccard 기반)
+ */
+function similarity(a, b) {
+  if (a === b) return 1;
+  const setA = new Set(a.split(''));
+  const setB = new Set(b.split(''));
+  const intersection = new Set([...setA].filter(x => setB.has(x)));
+  const union = new Set([...setA, ...setB]);
+  return intersection.size / union.size;
+}
+
+/**
+ * 가격 지수 계산 (0~100, 높을수록 좋은 가격)
+ */
+function calculatePriceIndex(current, lowest, average) {
+  if (current <= lowest) return 100;
+  if (average <= 0) return 50;
+  
+  const ratio = (average - current) / average;
+  // -0.3 ~ +0.3 범위를 0~100으로 매핑
+  const index = Math.round(50 + ratio * 150);
+  return Math.max(0, Math.min(100, index));
+}
+
+/**
+ * 브랜드 추출
+ */
+function extractBrand(title, productType) {
+  const brands = {
+    laptop: ['ASUS', 'MSI', 'HP', 'LG', '삼성', '레노버', '에이서', '기가바이트', '애플', '한성', '델', 'Lenovo', 'Acer', 'Dell', 'Apple', 'Samsung', 'Gigabyte'],
+    monitor: ['LG', '삼성', 'ASUS', 'BenQ', '델', 'MSI', 'ViewSonic', 'Dell', 'Samsung', 'AOC', '필립스', 'Philips'],
+    desktop: ['HP', '레노버', 'MSI', 'ASUS', '한성', '애플', '델', 'Lenovo', 'Dell', 'Apple', 'Samsung', '삼성'],
+  };
+
+  const titleLower = title.toLowerCase();
+  for (const brand of (brands[productType] || [])) {
+    if (titleLower.includes(brand.toLowerCase())) {
+      // 한국어 브랜드명으로 통일
+      const brandMap = {
+        'asus': 'ASUS', 'msi': 'MSI', 'hp': 'HP', 'lg': 'LG전자',
+        'samsung': '삼성전자', '삼성': '삼성전자', 'lenovo': '레노버', '레노버': '레노버',
+        'acer': '에이서', 'dell': '델', 'apple': '애플', '애플': '애플',
+        'gigabyte': '기가바이트', 'benq': 'BenQ', 'viewsonic': 'ViewSonic',
+        '한성': '한성컴퓨터', 'aoc': 'AOC', 'philips': '필립스', '필립스': '필립스',
+      };
+      return brandMap[brand.toLowerCase()] || brand;
+    }
+  }
+  return '기타';
+}
+
+/**
+ * 상품명 정리
+ */
+function cleanProductName(title) {
+  return title
+    .replace(/\[.*?\]/g, '') // [특가] 등 제거
+    .replace(/\(.*?\)/g, '') // (정품) 등 제거
+    .replace(/무료배송/g, '')
+    .replace(/당일발송/g, '')
+    .replace(/공식판매점/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 80); // 최대 80자
+}
+
+/**
+ * 태그 추출
+ */
+function extractTags(title, productType) {
+  const tags = [];
+  const titleLower = title.toLowerCase();
+
+  const tagKeywords = {
+    laptop: {
+      '게이밍': ['게이밍', 'gaming', 'rtx', 'gtx'],
+      '울트라북': ['울트라', 'slim', '슬림', '경량'],
+      '가성비': ['가성비', '입문'],
+      'OLED': ['oled'],
+      '신제품': ['2025', '2026', '신제품', 'new'],
+    },
+    monitor: {
+      '게이밍': ['게이밍', 'gaming', '144hz', '165hz', '240hz'],
+      '4K': ['4k', 'uhd', '3840'],
+      'OLED': ['oled'],
+      '울트라와이드': ['울트라와이드', 'ultrawide', '34인치', '49인치'],
+      'USB-C': ['usb-c', 'usbc', 'type-c'],
+      '커브드': ['커브드', 'curved', '곡면'],
+    },
+    desktop: {
+      '게이밍': ['게이밍', 'gaming', 'rtx', 'gtx'],
+      '미니PC': ['미니', 'mini', 'nuc', '소형'],
+      '올인원': ['올인원', 'all-in-one', 'aio', 'imac'],
+      '애플': ['mac', '맥', 'apple', '애플'],
+    },
+  };
+
+  const typeKeywords = tagKeywords[productType] || {};
+  for (const [tag, keywords] of Object.entries(typeKeywords)) {
+    if (keywords.some(kw => titleLower.includes(kw))) {
+      tags.push(tag);
+    }
+  }
+
+  return tags.length > 0 ? tags : [productType];
+}
+
+/**
+ * 스토어 로고
+ */
+function getStoreLogo(mallName) {
+  const logos = {
+    '쿠팡': '🛒', 'G마켓': '🛍️', '11번가': '🏪', '옥션': '🏷️',
+    '네이버': '🟢', 'SSG': '🔴', '롯데ON': '🟡',
+  };
+  return logos[mallName] || '🏪';
+}
+
+/**
+ * 시간 표시
+ */
+function getTimeAgo() {
+  return `${Math.floor(Math.random() * 30) + 1}분 전`;
+}
+
+/**
+ * 문자열 해시 (간단한 해시)
+ */
+function hashString(str) {
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    const char = str.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash = hash & hash; // 32-bit integer
+  }
+  return Math.abs(hash).toString(36);
+}
+
+/**
+ * 어필리에이트 링크 보강: 수집된 상품의 스토어 URL에 어필리에이트 매칭 적용
+ */
+function enrichWithAffiliateLinks(products) {
+  let affiliateConfig = { naver: {} };
+  try {
+    if (fs.existsSync(AFFILIATE_LINKS_PATH)) {
+      affiliateConfig = JSON.parse(fs.readFileSync(AFFILIATE_LINKS_PATH, 'utf-8'));
+    }
+  } catch { /* ignore */ }
+
+  const naverLinks = affiliateConfig.naver || {};
+
+  for (const product of products) {
+    for (const store of product.stores) {
+      // 네이버 어필리에이트 매칭 (상품명 부분 일치)
+      if (store.store && (store.store.includes('네이버') || store.url?.includes('naver.com') || store.url?.includes('search.shopping'))) {
+        const titleLower = product.name.toLowerCase();
+        for (const [keyword, url] of Object.entries(naverLinks)) {
+          if (keyword.startsWith('_')) continue;
+          if (!url) continue;
+          if (titleLower.includes(keyword.toLowerCase())) {
+            store.url = url;
+            store.isAffiliate = true;
+            break;
+          }
+        }
+      }
+
+      // 쿠팡 URL 마킹 (프론트엔드에서 딥링크 변환)
+      if (store.url?.includes('coupang.com')) {
+        store.isAffiliate = true;
+      }
+    }
+  }
+
+  return products;
+}
+
+/**
+ * 전체 동기화 실행
+ */
+async function syncAll() {
+  console.log(`\n🔄 [ProductSync] 전체 동기화 시작 (${new Date().toLocaleString('ko-KR')})`);
+  ensureDirectories();
+
+  const results = {};
+
+  for (const [productType, queries] of Object.entries(SEARCH_QUERIES)) {
+    console.log(`  📦 ${productType} 동기화 중...`);
+    
+    const catalog = loadCatalog(productType);
+    const existingProducts = catalog.products || [];
+    const allNewProducts = [];
+    const priceRange = PRICE_RANGES[productType];
+
+    for (const { query, category, display } of queries) {
+      try {
+        const items = await fetchFromNaver(query, display);
+        
+        for (const item of items) {
+          const title = stripHtml(item.title);
+          const price = parseInt(item.lprice, 10) || 0;
+          
+          // 유효성 검사
+          if (!isValidProduct(title, productType)) continue;
+          if (price < priceRange.min || price > priceRange.max) continue;
+          
+          const normalized = normalizeNaverProduct(item, productType, category);
+          allNewProducts.push(normalized);
+        }
+
+        // API 속도 제한 준수 (네이버: 초당 10회)
+        await delay(150);
+      } catch (err) {
+        console.error(`    ❌ "${query}" 검색 실패:`, err.message);
+      }
+    }
+
+    // 기존 + 신규 병합
+    const { products, addedCount, updatedCount } = mergeProducts(existingProducts, allNewProducts);
+
+    // 어필리에이트 링크 보강
+    enrichWithAffiliateLinks(products);
+
+    // 가격순 정렬
+    products.sort((a, b) => b.discount.percent - a.discount.percent);
+
+    // 카탈로그 저장
+    saveCatalog(productType, {
+      products,
+      lastSync: new Date().toISOString(),
+      syncCount: (catalog.syncCount || 0) + 1,
+      stats: {
+        total: products.length,
+        autoGenerated: products.filter(p => p._autoGenerated).length,
+        manual: products.filter(p => !p._autoGenerated).length,
+        added: addedCount,
+        updated: updatedCount,
+      },
+    });
+
+    results[productType] = { total: products.length, added: addedCount, updated: updatedCount };
+    console.log(`    ✅ ${productType}: ${products.length}개 (신규 +${addedCount}, 업데이트 ${updatedCount})`);
+  }
+
+  console.log(`✅ [ProductSync] 동기화 완료\n`);
+  return results;
+}
+
+/**
+ * 단일 제품 타입만 동기화
+ */
+async function syncProductType(productType) {
+  const queries = SEARCH_QUERIES[productType];
+  if (!queries) {
+    throw new Error(`알 수 없는 제품 타입: ${productType}`);
+  }
+
+  ensureDirectories();
+  const catalog = loadCatalog(productType);
+  const existingProducts = catalog.products || [];
+  const allNewProducts = [];
+  const priceRange = PRICE_RANGES[productType];
+
+  for (const { query, category, display } of queries) {
+    try {
+      const items = await fetchFromNaver(query, display);
+      for (const item of items) {
+        const title = stripHtml(item.title);
+        const price = parseInt(item.lprice, 10) || 0;
+        if (!isValidProduct(title, productType)) continue;
+        if (price < priceRange.min || price > priceRange.max) continue;
+        allNewProducts.push(normalizeNaverProduct(item, productType, category));
+      }
+      await delay(150);
+    } catch (err) {
+      console.error(`[ProductSync] "${query}" 실패:`, err.message);
+    }
+  }
+
+  const { products, addedCount, updatedCount } = mergeProducts(existingProducts, allNewProducts);
+  products.sort((a, b) => b.discount.percent - a.discount.percent);
+
+  saveCatalog(productType, {
+    products,
+    lastSync: new Date().toISOString(),
+    syncCount: (catalog.syncCount || 0) + 1,
+    stats: { total: products.length, autoGenerated: products.filter(p => p._autoGenerated).length, manual: products.filter(p => !p._autoGenerated).length, added: addedCount, updated: updatedCount },
+  });
+
+  return { total: products.length, added: addedCount, updated: updatedCount };
+}
+
+module.exports = {
+  syncAll,
+  syncProductType,
+  loadCatalog,
+  getPriceHistory,
+  ensureDirectories,
+};
