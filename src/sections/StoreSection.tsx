@@ -120,11 +120,15 @@ export default function StoreSection({ laptops, onNavigate, onCategorySelect }: 
                 initial={{ opacity: 0, x: 20 }}
                 animate={isInView ? { opacity: 1, x: 0 } : {}}
                 transition={{ duration: 0.4, delay: 0.5 + index * 0.05 }}
-                onClick={() => onNavigate('store')}
+                onClick={() => onCategorySelect(laptop.category)}
                 className="flex-shrink-0 w-[240px] bg-white rounded-2xl p-4 shadow-sm hover:shadow-lg transition-all cursor-pointer group"
               >
-                <div className="aspect-[4/3] bg-slate-100 rounded-xl flex items-center justify-center mb-4">
-                  <span className="text-5xl group-hover:scale-110 transition-transform">💻</span>
+                <div className="aspect-[4/3] bg-slate-100 rounded-xl flex items-center justify-center mb-4 overflow-hidden">
+                  {laptop.images?.[0]?.startsWith('http') ? (
+                    <img src={laptop.images[0]} alt={laptop.name} className="w-full h-full object-contain group-hover:scale-110 transition-transform" loading="lazy" />
+                  ) : (
+                    <span className="text-5xl group-hover:scale-110 transition-transform">💻</span>
+                  )}
                 </div>
                 {laptop.discount.percent > 0 && (
                   <span className="inline-block px-2 py-1 bg-rose-500 text-white text-xs font-medium rounded-full mb-2">

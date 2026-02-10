@@ -147,19 +147,21 @@ export default function Navbar({
 
                   {/* Dropdown */}
                   {hoveredType === type.hash && (
-                    <div className="absolute top-full left-0 mt-1 w-40 bg-white rounded-xl shadow-lg border border-slate-200 py-2 z-50">
-                      {type.subLinks.map((sub) => (
-                        <button
-                          key={sub.section}
-                          onClick={() => {
-                            onNavigateToPage(type.hash);
-                            setHoveredType(null);
-                          }}
-                          className="w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition-colors"
-                        >
-                          {sub.name}
-                        </button>
-                      ))}
+                    <div className="absolute top-full left-0 pt-1 w-40 z-50">
+                      <div className="bg-white rounded-xl shadow-lg border border-slate-200 py-2">
+                        {type.subLinks.map((sub) => (
+                          <button
+                            key={sub.section}
+                            onClick={() => {
+                              onNavigateToPage(type.hash);
+                              setHoveredType(null);
+                            }}
+                            className="w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition-colors"
+                          >
+                            {sub.name}
+                          </button>
+                        ))}
+                      </div>
                     </div>
                   )}
                 </div>

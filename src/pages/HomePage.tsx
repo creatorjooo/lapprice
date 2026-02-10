@@ -203,8 +203,12 @@ export default function HomePage({ onNavigateToPage }: HomePageProps) {
                   className="cursor-pointer group bg-white rounded-xl border border-slate-200 p-5 hover:shadow-lg transition-all hover:-translate-y-0.5"
                 >
                   <div className="flex items-start gap-4">
-                    <div className="w-16 h-16 bg-gradient-to-br from-slate-100 to-slate-200 rounded-xl flex items-center justify-center text-3xl flex-shrink-0">
-                      {cat.emoji}
+                    <div className="w-16 h-16 bg-gradient-to-br from-slate-100 to-slate-200 rounded-xl flex items-center justify-center text-3xl flex-shrink-0 overflow-hidden">
+                      {product.images?.[0]?.startsWith('http') ? (
+                        <img src={product.images[0]} alt={product.name} className="w-full h-full object-contain" loading="lazy" />
+                      ) : (
+                        cat.emoji
+                      )}
                     </div>
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 mb-1">

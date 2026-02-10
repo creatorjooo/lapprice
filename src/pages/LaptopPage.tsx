@@ -58,6 +58,7 @@ export default function LaptopPage({
 
   // Refs for scrolling
   const storeRef = useRef<HTMLDivElement>(null);
+  const productListRef = useRef<HTMLDivElement>(null);
   const appleRef = useRef<HTMLDivElement>(null);
   const gamingRef = useRef<HTMLDivElement>(null);
   const ultrabookRef = useRef<HTMLDivElement>(null);
@@ -92,7 +93,10 @@ export default function LaptopPage({
     setSelectedCategory(category);
     setFilters(prev => ({ ...prev, category: category === 'all' ? [] : [category] }));
     setCurrentView('store');
-    storeRef.current?.scrollIntoView({ behavior: 'smooth' });
+    // ProductList 영역으로 스크롤 (카테고리 필터 결과를 바로 보이게)
+    setTimeout(() => {
+      productListRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 100);
   }, []);
 
   const handleFilterChange = useCallback((newFilters: FilterState) => {
@@ -237,7 +241,7 @@ export default function LaptopPage({
         />
       </div>
 
-      <section className="bg-slate-50 dark:bg-slate-100 py-12">
+      <section ref={productListRef} className="bg-slate-50 dark:bg-slate-100 py-12">
         <div className="max-w-[1920px] mx-auto">
           <div className="px-4 sm:px-6 lg:px-8 mb-8">
             <div className="flex items-center justify-between">
