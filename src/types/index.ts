@@ -35,7 +35,7 @@ export interface Laptop {
   brand: string;
   name: string;
   model: string;
-  category: 'gaming' | 'ultrabook' | 'business' | 'creator' | 'budget';
+  category: 'gaming' | 'ultrabook' | 'business' | 'creator' | 'budget' | 'apple';
   specs: {
     cpu: string;
     cpuType: 'intel' | 'amd' | 'apple';
@@ -90,7 +90,7 @@ export interface Monitor {
   model: string;
   category: 'gaming' | 'professional' | 'ultrawide' | 'general' | 'portable';
   specs: {
-    panelType: 'IPS' | 'VA' | 'OLED' | 'TN' | 'Mini LED';
+    panelType: 'IPS' | 'VA' | 'OLED' | 'TN' | 'Mini LED' | 'QD-OLED' | 'IPS Black';
     resolution: string;
     resolutionLabel: string;
     refreshRate: number;
@@ -145,7 +145,7 @@ export interface Desktop {
   brand: string;
   name: string;
   model: string;
-  category: 'gaming' | 'workstation' | 'minipc' | 'allinone' | 'office';
+  category: 'gaming' | 'workstation' | 'minipc' | 'allinone' | 'office' | 'mac' | 'creator';
   specs: {
     cpu: string;
     cpuType: 'intel' | 'amd' | 'apple';

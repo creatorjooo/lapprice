@@ -44,7 +44,8 @@ export default function DesktopPage({
   const sectionToCategory: Record<string, string> = {
     'desk-gaming': 'gaming',
     'desk-mac': 'mac',
-    'desk-mini': 'mini',
+    'desk-mini': 'minipc',
+    'desk-allinone': 'allinone',
     'desk-office': 'office',
     'desk-creator': 'creator',
   };
@@ -53,7 +54,8 @@ export default function DesktopPage({
   const deskCategoryLabels: Record<string, string> = {
     gaming: '게이밍 데스크탑',
     mac: 'Mac 데스크탑',
-    mini: '미니 PC',
+    minipc: '미니 PC',
+    allinone: '올인원 데스크탑',
     office: '사무용 데스크탑',
     creator: '크리에이터 데스크탑',
   };

@@ -33,6 +33,7 @@ export default function Footer({ onNavigateToPage }: FooterProps) {
         { label: '게이밍PC', action: () => onNavigateToPage?.('desktop-desk-gaming') },
         { label: 'Mac', action: () => onNavigateToPage?.('desktop-desk-mac') },
         { label: '미니PC', action: () => onNavigateToPage?.('desktop-desk-mini') },
+        { label: '올인원', action: () => onNavigateToPage?.('desktop-desk-allinone') },
         { label: '사무용', action: () => onNavigateToPage?.('desktop-desk-office') },
       ],
     },
