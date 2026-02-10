@@ -1,0 +1,44 @@
+services:
+  - type: web
+    name: lapprice
+    runtime: node
+    plan: free
+    region: singapore
+    buildCommand: npm install && npm run build
+    startCommand: NODE_ENV=production node server/index.js
+    envVars:
+      # 네이버 쇼핑 API
+      - key: NAVER_CLIENT_ID
+        sync: false
+      - key: NAVER_CLIENT_SECRET
+        sync: false
+      # 쿠팡 파트너스 API
+      - key: COUPANG_ACCESS_KEY
+        sync: false
+      - key: COUPANG_SECRET_KEY
+        sync: false
+      # 11번가 Open API
+      - key: ELEVENTH_ST_API_KEY
+        sync: false
+      # 서버 설정
+      - key: PORT
+        value: "10000"
+      - key: NODE_ENV
+        value: production
+      - key: CACHE_TTL
+        value: "300"
+      # 어필리에이트
+      - key: AFFILIATE_ENABLED
+        value: "true"
+      - key: COUPANG_AFFILIATE_SUBID_PREFIX
+        value: lapprice
+      - key: DEEPLINK_CACHE_TTL
+        value: "86400"
+      # 관리자
+      - key: ADMIN_PASSWORD
+        sync: false
+      # 자동 동기화
+      - key: AUTO_SYNC_ENABLED
+        value: "true"
+      - key: SYNC_INTERVAL_HOURS
+        value: "6"
