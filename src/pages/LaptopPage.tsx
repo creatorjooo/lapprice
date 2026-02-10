@@ -109,15 +109,8 @@ export default function LaptopPage({
     }
   }, [onOpenCompare]);
 
-  const handleCategorySelect = useCallback((category: string) => {
-    setSelectedCategory(category);
-    setFilters(prev => ({ ...prev, category: category === 'all' ? [] : [category] }));
-    setCurrentView('store');
-    // ProductList 영역으로 스크롤 (카테고리 필터 결과를 바로 보이게)
-    setTimeout(() => {
-      productListRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    }, 100);
-  }, []);
+  // 카테고리 선택 시 서브페이지로 이동 (onNavigateToPage 사용)
+  // 기존 handleCategorySelect는 onNavigateToPage로 대체됨
 
   const handleFilterChange = useCallback((newFilters: FilterState) => {
     setFilters(newFilters);

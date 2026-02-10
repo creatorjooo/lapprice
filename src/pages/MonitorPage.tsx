@@ -231,14 +231,14 @@ export default function MonitorPage({
                         {monitor.tags.slice(0, 3).map(t => <Badge key={t} variant="secondary" className="text-xs">{t}</Badge>)}
                       </div>
                       <div className="flex gap-2">
-                        {monitor.affiliateUrls?.slice(0, 2).map((url: string, idx: number) => {
-                          const platform = getPlatformKey(url);
+                        {monitor.stores?.slice(0, 2).map((store, idx) => {
+                          const platform = getPlatformKey(store.url);
                           return (
-                            <a key={idx} href={url} target="_blank" rel="noopener noreferrer"
-                              onClick={() => { if (isAffiliatePlatform(platform)) trackAffiliateClick(monitor.id, platform, 'product_card'); }}
+                            <a key={idx} href={store.url} target="_blank" rel="noopener noreferrer"
+                              onClick={() => { if (isAffiliatePlatform(platform)) trackAffiliateClick({ productId: monitor.id, platform, source: 'productcard', url: store.url, productName: monitor.name }); }}
                               className="flex-1 text-center py-2 text-sm font-medium bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
                             >
-                              {isCoupangUrl(url) ? '쿠팡' : '최저가 보기'} <ExternalLink className="w-3 h-3 inline ml-1" />
+                              {isCoupangUrl(store.url) ? '쿠팡' : store.store || '최저가 보기'} <ExternalLink className="w-3 h-3 inline ml-1" />
                             </a>
                           );
                         })}
