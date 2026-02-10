@@ -4,7 +4,7 @@ const path = require('path');
 require('dotenv').config();
 
 const { getCachedResult, setCachedResult, withTimeout } = require('./utils/helpers');
-const { syncAll, ensureDirectories } = require('./services/productSync');
+const { syncAll, ensureDirectories, healAllImages } = require('./services/productSync');
 
 const app = express();
 app.use(cors());
@@ -144,6 +144,12 @@ app.listen(PORT, () => {
       try {
         console.log('🔄 [초기 동기화] 시작...');
         await syncAll();
+        // 동기화 후 이미지 자동 보충
+        console.log('🖼️ [이미지 보충] 시작...');
+        const healResults = await healAllImages();
+        healResults.forEach(r => {
+          if (r.updated > 0) console.log(`  🖼️ ${r.productType}: ${r.updated}개 이미지 보충`);
+        });
       } catch (err) {
         console.error('❌ [초기 동기화] 실패:', err.message);
       }
@@ -153,6 +159,8 @@ app.listen(PORT, () => {
     setInterval(async () => {
       try {
         await syncAll();
+        // 동기화 후 이미지 자동 보충
+        await healAllImages();
       } catch (err) {
         console.error('❌ [주기 동기화] 실패:', err.message);
       }

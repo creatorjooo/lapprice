@@ -863,6 +863,7 @@ function AnalyticsTab({ stats, statsDays, setStatsDays }: {
 function SyncPanel({ token }: { token: string }) {
   const [syncStats, setSyncStats] = useState<Record<string, unknown> | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [isHealingImages, setIsHealingImages] = useState(false);
   const [syncResult, setSyncResult] = useState<string>('');
   const [syncType, setSyncType] = useState<string>('all');
 
@@ -934,10 +935,37 @@ function SyncPanel({ token }: { token: string }) {
           </div>
           <button
             onClick={handleSync}
-            disabled={isSyncing}
+            disabled={isSyncing || isHealingImages}
             className="px-6 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {isSyncing ? '동기화 중...' : '지금 동기화'}
+          </button>
+          <button
+            onClick={async () => {
+              setIsHealingImages(true);
+              setSyncResult('');
+              try {
+                const res = await fetch(`${API_PRODUCTS_BASE}/heal-images`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+                  body: JSON.stringify({}),
+                });
+                const data = await res.json();
+                if (data.success) {
+                  const totalUpdated = data.results.reduce((sum: number, r: { updated: number }) => sum + r.updated, 0);
+                  setSyncResult(`🖼️ 이미지 보충 완료! ${totalUpdated}개 업데이트`);
+                } else {
+                  setSyncResult(`오류: ${data.error || '알 수 없는 오류'}`);
+                }
+              } catch (err) {
+                setSyncResult(`이미지 보충 실패: ${(err as Error).message}`);
+              }
+              setIsHealingImages(false);
+            }}
+            disabled={isSyncing || isHealingImages}
+            className="px-6 py-2 bg-purple-600 text-white rounded-lg text-sm font-medium hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {isHealingImages ? '이미지 보충 중...' : '🖼️ 이미지 자동 보충'}
           </button>
         </div>
 
@@ -985,7 +1013,8 @@ function SyncPanel({ token }: { token: string }) {
           <li className="flex gap-2"><span className="shrink-0 text-slate-500">4.</span> 기존 상품: 가격 자동 업데이트 & 가격 히스토리 기록</li>
           <li className="flex gap-2"><span className="shrink-0 text-slate-500">5.</span> 신규 상품: 자동 추가 (브랜드/카테고리 자동 분류)</li>
           <li className="flex gap-2"><span className="shrink-0 text-slate-500">6.</span> 부품/악세서리 자동 필터링 (가격 범위 + 키워드)</li>
-          <li className="flex gap-2"><span className="shrink-0 text-slate-500">7.</span> 프론트엔드는 API 우선, 실패 시 정적 데이터 자동 fallback</li>
+          <li className="flex gap-2"><span className="shrink-0 text-slate-500">7.</span> 🖼️ 동기화 후 이미지 자동 보충 (네이버에서 썸네일 자동 검색)</li>
+          <li className="flex gap-2"><span className="shrink-0 text-slate-500">8.</span> 프론트엔드는 API 우선, 실패 시 정적 데이터 자동 fallback</li>
         </ul>
         <div className="mt-4 text-xs text-slate-600">환경변수: AUTO_SYNC_ENABLED=true/false, SYNC_INTERVAL_HOURS=6</div>
       </div>

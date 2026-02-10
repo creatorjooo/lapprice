@@ -324,6 +324,15 @@ function mergeProducts(existingProducts, newProducts) {
         recordPriceHistory(existing.id, newPrice, newP.stores[0]?.store || '평균');
       }
 
+      // 이미지 자동 갱신: 기존 이미지가 없거나 로컬 경로(/로 시작)면 API 이미지로 교체
+      if (newP.images?.[0] && newP.images[0].startsWith('http')) {
+        const existingImg = existing.images?.[0] || '';
+        if (!existingImg || !existingImg.startsWith('http') || existingImg.includes('placehold.co')) {
+          existing.images = newP.images;
+          console.log(`[ProductSync] 이미지 업데이트: ${existing.name} → ${newP.images[0].substring(0, 60)}...`);
+        }
+      }
+
       // 스토어 정보 업데이트/추가
       mergeStores(existing, newP);
     } else {
@@ -685,10 +694,91 @@ async function syncProductType(productType) {
   return { total: products.length, added: addedCount, updated: updatedCount };
 }
 
+/**
+ * 이미지 자동 보충 (healImages)
+ * 카탈로그에서 이미지가 없거나 플레이스홀더인 제품에 대해
+ * 네이버 쇼핑 API에서 이미지를 자동으로 가져옴
+ */
+async function healImages(productType) {
+  ensureDirectories();
+  const catalog = loadCatalog(productType);
+  const products = catalog.products || [];
+  let updatedCount = 0;
+
+  const productsNeedingImages = products.filter(p => {
+    const img = p.images?.[0] || '';
+    return !img || !img.startsWith('http') || img.includes('placehold.co');
+  });
+
+  if (productsNeedingImages.length === 0) {
+    return { productType, checked: products.length, updated: 0, message: '모든 제품에 이미지가 있습니다' };
+  }
+
+  console.log(`[HealImages] ${productType}: ${productsNeedingImages.length}개 제품 이미지 보충 시작`);
+
+  for (const product of productsNeedingImages) {
+    try {
+      // 제품명으로 네이버 검색하여 이미지 가져오기
+      const searchQuery = `${product.brand} ${product.name}`.trim();
+      const items = await fetchFromNaver(searchQuery, 3);
+      
+      if (items.length > 0 && items[0].image) {
+        product.images = [items[0].image];
+        product._lastUpdated = new Date().toISOString();
+        updatedCount++;
+        console.log(`[HealImages] ✅ ${product.name} → ${items[0].image.substring(0, 60)}...`);
+      }
+
+      // API 부하 방지
+      await delay(200);
+    } catch (err) {
+      console.error(`[HealImages] ❌ ${product.name}: ${err.message}`);
+    }
+  }
+
+  if (updatedCount > 0) {
+    catalog.products = products;
+    saveCatalog(productType, catalog);
+    console.log(`[HealImages] ${productType}: ${updatedCount}개 이미지 업데이트 완료`);
+  }
+
+  return { productType, checked: products.length, needsImage: productsNeedingImages.length, updated: updatedCount };
+}
+
+/**
+ * 전체 카탈로그 이미지 보충
+ */
+async function healAllImages() {
+  const results = [];
+  for (const type of ['laptop', 'monitor', 'desktop']) {
+    const result = await healImages(type);
+    results.push(result);
+  }
+  return results;
+}
+
+/**
+ * 단일 제품 이미지 검색 (API 엔드포인트용)
+ */
+async function searchProductImage(productName) {
+  const items = await fetchFromNaver(productName, 3);
+  if (items.length > 0 && items[0].image) {
+    return {
+      image: items[0].image,
+      source: 'naver',
+      title: stripHtml(items[0].title),
+    };
+  }
+  return null;
+}
+
 module.exports = {
   syncAll,
   syncProductType,
   loadCatalog,
   getPriceHistory,
   ensureDirectories,
+  healImages,
+  healAllImages,
+  searchProductImage,
 };

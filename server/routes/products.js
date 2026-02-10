@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { loadCatalog, getPriceHistory, syncAll, syncProductType } = require('../services/productSync');
+const { loadCatalog, getPriceHistory, syncAll, syncProductType, healAllImages, searchProductImage } = require('../services/productSync');
 
 /**
  * GET /api/products
@@ -200,6 +200,48 @@ router.get('/hot-deals', (req, res) => {
     .slice(0, limitNum);
 
   res.json({ total: hotDeals.length, products: hotDeals });
+});
+
+/**
+ * POST /api/products/heal-images
+ * 이미지 없는 제품에 대해 네이버에서 자동으로 이미지 검색/보충
+ * (관리자 전용)
+ */
+router.post('/heal-images', async (req, res) => {
+  const { password } = req.body;
+  const adminPassword = process.env.ADMIN_PASSWORD || 'lapprice2026admin';
+  const token = req.headers.authorization?.replace('Bearer ', '');
+
+  if (password !== adminPassword && token !== adminPassword) {
+    return res.status(401).json({ error: '인증 필요' });
+  }
+
+  try {
+    const results = await healAllImages();
+    res.json({ success: true, results });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * GET /api/products/search-image
+ * 특정 제품명으로 이미지 검색 (관리자용)
+ */
+router.get('/search-image', async (req, res) => {
+  const { q } = req.query;
+  if (!q) return res.status(400).json({ error: 'q 파라미터 필요' });
+
+  try {
+    const result = await searchProductImage(q);
+    if (result) {
+      res.json(result);
+    } else {
+      res.json({ image: null, message: '이미지를 찾을 수 없습니다' });
+    }
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 module.exports = router;
