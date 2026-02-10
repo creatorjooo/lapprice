@@ -180,8 +180,8 @@ function App() {
 
   const handleSearch = useCallback((query: string) => {
     setSearchQuery(query.trim());
-    // 현재 페이지가 home이면 laptop으로 이동
-    if (query.trim() && currentPage === 'home') {
+    // 홈이면 노트북 페이지로 이동, 이미 제품 페이지면 그대로 유지
+    if (query.trim() && !['laptop', 'monitor', 'desktop'].includes(currentPage)) {
       navigateToPage('laptop');
     }
   }, [currentPage, navigateToPage]);

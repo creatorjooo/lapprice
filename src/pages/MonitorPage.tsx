@@ -88,7 +88,11 @@ export default function MonitorPage({
       result = result.filter(m =>
         m.name.toLowerCase().includes(q) ||
         m.brand.toLowerCase().includes(q) ||
-        m.tags.some(t => t.toLowerCase().includes(q))
+        m.model.toLowerCase().includes(q) ||
+        m.tags.some(t => t.toLowerCase().includes(q)) ||
+        m.specs.panelType.toLowerCase().includes(q) ||
+        m.specs.resolutionLabel.toLowerCase().includes(q) ||
+        m.category.toLowerCase().includes(q)
       );
     }
     if (filters.category.length > 0) {

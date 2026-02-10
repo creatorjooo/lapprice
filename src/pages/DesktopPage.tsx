@@ -89,7 +89,11 @@ export default function DesktopPage({
       result = result.filter(d =>
         d.name.toLowerCase().includes(q) ||
         d.brand.toLowerCase().includes(q) ||
-        d.tags.some(t => t.toLowerCase().includes(q))
+        d.model.toLowerCase().includes(q) ||
+        d.tags.some(t => t.toLowerCase().includes(q)) ||
+        d.specs.cpu.toLowerCase().includes(q) ||
+        d.specs.gpu.toLowerCase().includes(q) ||
+        d.category.toLowerCase().includes(q)
       );
     }
     if (filters.category.length > 0) {

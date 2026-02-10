@@ -1,6 +1,22 @@
 import { useState, useCallback, useRef } from 'react';
 import { laptops } from '@/data/laptops';
-import type { Laptop } from '@/types';
+import { monitors } from '@/data/monitors';
+import { desktops } from '@/data/desktops';
+import type { Laptop, Monitor, Desktop } from '@/types';
+
+// ─── 통합 검색 결과 타입 ───
+export interface UnifiedLocalResult {
+  id: string;
+  productType: 'laptop' | 'monitor' | 'desktop';
+  brand: string;
+  name: string;
+  price: number;
+  originalPrice: number;
+  discountPercent: number;
+  specSummary: string;
+  icon: string;
+  hash: string; // 클릭 시 이동할 해시
+}
 
 export interface ShoppingProduct {
   title: string;
@@ -22,7 +38,7 @@ export interface ShoppingResult {
 type PlatformStatus = 'idle' | 'loading' | 'success' | 'error' | 'unavailable';
 
 export interface UseShoppingSearchReturn {
-  localResults: Laptop[];
+  localResults: UnifiedLocalResult[];
   externalResults: ShoppingResult[];
   isLoading: boolean;
   platformStatus: Record<string, PlatformStatus>;
@@ -46,39 +62,123 @@ const PLATFORM_NAMES: Record<string, string> = {
 
 const ALL_PLATFORMS = Object.keys(PLATFORM_NAMES);
 
+// ─── 노트북 → 통합 결과 변환 ───
+function laptopToUnified(l: Laptop): UnifiedLocalResult {
+  return {
+    id: l.id,
+    productType: 'laptop',
+    brand: l.brand,
+    name: l.name,
+    price: l.prices.current,
+    originalPrice: l.prices.original,
+    discountPercent: l.discount.percent,
+    specSummary: `${l.specs.cpu} · ${l.specs.ram}GB · ${l.specs.storage}GB`,
+    icon: '💻',
+    hash: 'laptop',
+  };
+}
+
+// ─── 모니터 → 통합 결과 변환 ───
+function monitorToUnified(m: Monitor): UnifiedLocalResult {
+  return {
+    id: m.id,
+    productType: 'monitor',
+    brand: m.brand,
+    name: m.name,
+    price: m.prices.current,
+    originalPrice: m.prices.original,
+    discountPercent: m.discount.percent,
+    specSummary: `${m.specs.screenSize}" ${m.specs.resolutionLabel} ${m.specs.refreshRate}Hz ${m.specs.panelType}`,
+    icon: '🖥️',
+    hash: 'monitor',
+  };
+}
+
+// ─── 데스크탑 → 통합 결과 변환 ───
+function desktopToUnified(d: Desktop): UnifiedLocalResult {
+  return {
+    id: d.id,
+    productType: 'desktop',
+    brand: d.brand,
+    name: d.name,
+    price: d.prices.current,
+    originalPrice: d.prices.original,
+    discountPercent: d.discount.percent,
+    specSummary: `${d.specs.cpu} · ${d.specs.gpu} · ${d.specs.ram}GB`,
+    icon: '🖥️',
+    hash: 'desktop',
+  };
+}
+
 export function useShoppingSearch(): UseShoppingSearchReturn {
   const [query, setQuery] = useState('');
-  const [localResults, setLocalResults] = useState<Laptop[]>([]);
+  const [localResults, setLocalResults] = useState<UnifiedLocalResult[]>([]);
   const [externalResults, setExternalResults] = useState<ShoppingResult[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [platformStatus, setPlatformStatus] = useState<Record<string, PlatformStatus>>({});
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const abortRef = useRef<AbortController | null>(null);
 
-  // 로컬 데이터 검색
-  const searchLocal = useCallback((q: string): Laptop[] => {
+  // ─── 로컬 통합 검색 (노트북 + 모니터 + 데스크탑) ───
+  const searchLocal = useCallback((q: string): UnifiedLocalResult[] => {
     if (!q.trim()) return [];
     const lower = q.toLowerCase();
-    return laptops.filter(
-      (l) =>
-        l.name.toLowerCase().includes(lower) ||
-        l.brand.toLowerCase().includes(lower) ||
-        l.model.toLowerCase().includes(lower) ||
-        l.tags.some((t) => t.toLowerCase().includes(lower)) ||
-        l.specs.cpu.toLowerCase().includes(lower) ||
-        l.specs.gpu.toLowerCase().includes(lower)
+
+    // 노트북 검색
+    const laptopResults = laptops
+      .filter(
+        (l) =>
+          l.name.toLowerCase().includes(lower) ||
+          l.brand.toLowerCase().includes(lower) ||
+          l.model.toLowerCase().includes(lower) ||
+          l.tags.some((t) => t.toLowerCase().includes(lower)) ||
+          l.specs.cpu.toLowerCase().includes(lower) ||
+          l.specs.gpu.toLowerCase().includes(lower) ||
+          l.category.toLowerCase().includes(lower)
+      )
+      .map(laptopToUnified);
+
+    // 모니터 검색
+    const monitorResults = monitors
+      .filter(
+        (m) =>
+          m.name.toLowerCase().includes(lower) ||
+          m.brand.toLowerCase().includes(lower) ||
+          m.model.toLowerCase().includes(lower) ||
+          m.tags.some((t) => t.toLowerCase().includes(lower)) ||
+          m.specs.panelType.toLowerCase().includes(lower) ||
+          m.specs.resolutionLabel.toLowerCase().includes(lower) ||
+          m.category.toLowerCase().includes(lower)
+      )
+      .map(monitorToUnified);
+
+    // 데스크탑 검색
+    const desktopResults = desktops
+      .filter(
+        (d) =>
+          d.name.toLowerCase().includes(lower) ||
+          d.brand.toLowerCase().includes(lower) ||
+          d.model.toLowerCase().includes(lower) ||
+          d.tags.some((t) => t.toLowerCase().includes(lower)) ||
+          d.specs.cpu.toLowerCase().includes(lower) ||
+          d.specs.gpu.toLowerCase().includes(lower) ||
+          d.category.toLowerCase().includes(lower)
+      )
+      .map(desktopToUnified);
+
+    // 할인율 높은 순으로 정렬
+    return [...laptopResults, ...monitorResults, ...desktopResults].sort(
+      (a, b) => b.discountPercent - a.discountPercent
     );
   }, []);
 
   // 외부 API 검색
   const searchExternal = useCallback(async (q: string) => {
-    // 이전 요청 취소
     if (abortRef.current) {
       abortRef.current.abort();
     }
     abortRef.current = new AbortController();
 
-    // 모든 플랫폼을 loading으로 설정
     const initialStatus: Record<string, PlatformStatus> = {};
     ALL_PLATFORMS.forEach((p) => {
       initialStatus[p] = 'loading';
@@ -97,7 +197,6 @@ export function useShoppingSearch(): UseShoppingSearchReturn {
       const data: ShoppingResult[] = await response.json();
       setExternalResults(data);
 
-      // 플랫폼별 상태 업데이트
       const newStatus: Record<string, PlatformStatus> = {};
       data.forEach((r) => {
         if (!r.available && r.error?.includes('미설정')) {

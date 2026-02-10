@@ -86,6 +86,13 @@ export default function Navbar({
 
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
+    const q = searchQuery.toLowerCase();
+    // 검색어에 따라 적절한 페이지로 이동
+    if (q.includes('모니터') || q.includes('monitor') || q.includes('울트라와이드') || q.includes('패널')) {
+      onNavigateToPage('monitor');
+    } else if (q.includes('데스크탑') || q.includes('desktop') || q.includes('미니pc') || q.includes('올인원') || q.includes('게이밍pc')) {
+      onNavigateToPage('desktop');
+    }
     onSearch(searchQuery);
     setIsSearchOpen(false);
     clearResults();
@@ -302,22 +309,31 @@ export default function Navbar({
 
             {localResults.length > 0 && (
               <div className="mt-8">
-                <p className="text-xs text-slate-400 uppercase tracking-wider mb-3">💻 우리 사이트 결과 ({localResults.length}개)</p>
+                <p className="text-xs text-slate-400 uppercase tracking-wider mb-3">🔍 사이트 내 검색 결과 ({localResults.length}개)</p>
                 <div className="space-y-2">
-                  {localResults.slice(0, 5).map((laptop) => (
+                  {localResults.slice(0, 8).map((item) => (
                     <button
-                      key={laptop.id}
-                      onClick={() => { onSearch(searchQuery); setIsSearchOpen(false); clearResults(); }}
+                      key={`${item.productType}-${item.id}`}
+                      onClick={() => { onSearch(item.name); onNavigateToPage(item.hash); setIsSearchOpen(false); clearResults(); setSearchQuery(''); }}
                       className="w-full flex items-center gap-3 p-3 rounded-lg hover:bg-slate-50 transition-colors text-left"
                     >
-                      <div className="w-12 h-12 bg-slate-100 rounded-lg flex items-center justify-center text-xl flex-shrink-0">💻</div>
+                      <div className="w-12 h-12 bg-slate-100 rounded-lg flex items-center justify-center text-xl flex-shrink-0">{item.icon}</div>
                       <div className="flex-1 min-w-0">
-                        <p className="text-sm font-medium truncate">{laptop.brand} {laptop.name}</p>
-                        <p className="text-xs text-slate-500">{laptop.specs.cpu} · {laptop.specs.ram}GB · {laptop.specs.storage}GB</p>
+                        <div className="flex items-center gap-1.5">
+                          <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${
+                            item.productType === 'laptop' ? 'bg-blue-100 text-blue-700' :
+                            item.productType === 'monitor' ? 'bg-purple-100 text-purple-700' :
+                            'bg-emerald-100 text-emerald-700'
+                          }`}>
+                            {item.productType === 'laptop' ? '노트북' : item.productType === 'monitor' ? '모니터' : '데스크탑'}
+                          </span>
+                          <p className="text-sm font-medium truncate">{item.brand} {item.name}</p>
+                        </div>
+                        <p className="text-xs text-slate-500 mt-0.5">{item.specSummary}</p>
                       </div>
                       <div className="text-right flex-shrink-0">
-                        <p className="text-sm font-bold text-emerald-600">{laptop.prices.current.toLocaleString()}원</p>
-                        {laptop.discount.percent > 0 && <p className="text-[10px] text-rose-500">-{laptop.discount.percent}%</p>}
+                        <p className="text-sm font-bold text-emerald-600">{item.price.toLocaleString()}원</p>
+                        {item.discountPercent > 0 && <p className="text-[10px] text-rose-500">-{item.discountPercent}%</p>}
                       </div>
                     </button>
                   ))}
