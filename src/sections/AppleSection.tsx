@@ -9,6 +9,8 @@ interface AppleSectionProps {
   laptops: Laptop[];
 }
 
+type LaptopStore = Laptop['stores'][number];
+
 // M칩 비교 데이터
 const chipComparison = [
   { chip: 'M4', cpu: '10코어', gpu: '10코어', memory: '최대 32GB', target: '일상/학생/사무', badge: '가성비' },
@@ -49,10 +51,12 @@ export default function AppleSection({ laptops }: AppleSectionProps) {
   const isInView = useInView(ref, { once: true, margin: '-50px' });
 
   const macbooks = useMemo(() => {
-    return laptops.filter((l) => l.brand === '애플').sort((a, b) => a.prices.current - b.prices.current);
+    return laptops
+      .filter((l) => l.brand === '애플' && l.stores.length > 0)
+      .sort((a, b) => a.prices.current - b.prices.current);
   }, [laptops]);
 
-  const handleStoreClick = (laptop: Laptop, store: typeof laptop.stores[0]) => {
+  const handleStoreClick = (laptop: Laptop, store: LaptopStore) => {
     trackAffiliateClick({
       productId: laptop.id,
       platform: getPlatformKey(store.store),
@@ -127,7 +131,9 @@ export default function AppleSection({ laptops }: AppleSectionProps) {
 
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-5">
             {macbooks.map((mac, index) => {
-              const lowestStore = mac.stores.reduce((min, s) => (s.price < min.price ? s : min), mac.stores[0]);
+              const sortedStores = [...mac.stores].sort((a, b) => a.price - b.price);
+              const lowestStore = sortedStores[0];
+              if (!lowestStore) return null;
 
               return (
                 <motion.div
@@ -216,9 +222,9 @@ export default function AppleSection({ laptops }: AppleSectionProps) {
                   </a>
 
                   {/* Other Stores */}
-                  {mac.stores.length > 1 && (
+                  {sortedStores.length > 1 && (
                     <div className="mt-2 space-y-1">
-                      {mac.stores.slice(1, 3).map((store, i) => (
+                      {sortedStores.slice(1, 3).map((store, i) => (
                         <a
                           key={i}
                           href={store.url}
@@ -260,7 +266,7 @@ export default function AppleSection({ laptops }: AppleSectionProps) {
           <div className="space-y-4">
             {buyingGuide.map((item, index) => {
               const mac = macbooks.find((m) => m.id === item.id);
-              const store = mac?.stores[0];
+              const store = mac ? [...mac.stores].sort((a, b) => a.price - b.price)[0] : undefined;
 
               return (
                 <motion.div

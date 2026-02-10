@@ -9,6 +9,8 @@ interface VsCompareProps {
   laptops: Laptop[];
 }
 
+type LaptopStore = Laptop['stores'][number];
+
 interface VsPair {
   idA: string;
   idB: string;
@@ -49,9 +51,9 @@ export default function VsCompare({ laptops }: VsCompareProps) {
     }).filter((c) => c.laptopA && c.laptopB);
   }, [laptops]);
 
-  const getAffiliateUrl = (laptop: Laptop) => {
+  const getAffiliateUrl = (laptop: Laptop): LaptopStore | null => {
     const affiliateStore = laptop.stores.find((s) => isAffiliatePlatform(s.store));
-    return affiliateStore || laptop.stores[0];
+    return affiliateStore || laptop.stores[0] || null;
   };
 
   const formatPrice = (price: number) => {
@@ -81,6 +83,7 @@ export default function VsCompare({ laptops }: VsCompareProps) {
             if (!laptopA || !laptopB) return null;
             const storeA = getAffiliateUrl(laptopA);
             const storeB = getAffiliateUrl(laptopB);
+            if (!storeA || !storeB) return null;
 
             return (
               <motion.div

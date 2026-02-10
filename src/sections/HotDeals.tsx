@@ -17,7 +17,7 @@ export default function HotDeals({ laptops }: HotDealsProps) {
   const hotDeals = useMemo(() => {
     // 선정 기준: 가격지수 높은 것, 할인율 높은 것, 어필리에이트 스토어 우선
     const candidates = laptops
-      .filter((l) => l.priceIndex >= 78 || l.discount.percent >= 20)
+      .filter((l) => (l.priceIndex >= 78 || l.discount.percent >= 20) && l.stores.length > 0)
       .sort((a, b) => {
         // 어필리에이트 스토어가 있는 제품 우선
         const aHasAffiliate = a.stores.some((s) => isAffiliatePlatform(s.store));
@@ -64,6 +64,7 @@ export default function HotDeals({ laptops }: HotDealsProps) {
           {hotDeals.map((laptop, index) => {
             // 어필리에이트 스토어 중 최저가 찾기
             const affiliateStore = laptop.stores.find((s) => isAffiliatePlatform(s.store)) || laptop.stores[0];
+            if (!affiliateStore) return null;
             const timingLabel = getTimingLabel(laptop);
 
             return (
