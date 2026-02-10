@@ -44,7 +44,6 @@ export default function LaptopPage({
   const laptops = isFromApi && apiLaptops.length > 0 ? apiLaptops : staticLaptops;
 
   const [, setCurrentView] = useState<'home' | 'store' | 'category'>('home');
-  const [, setSelectedCategory] = useState<string>('all');
 
   const [filters, setFilters] = useState<FilterState>({
     category: category ? [category] : [],
