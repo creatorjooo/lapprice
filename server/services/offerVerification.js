@@ -139,6 +139,306 @@ function normalizeText(value) {
     .replace(/[^a-z0-9가-힣]/g, '');
 }
 
+function toSafeString(value, fallback = '') {
+  const text = String(value || '').trim();
+  return text || fallback;
+}
+
+function toSafeBool(value, fallback = false) {
+  return typeof value === 'boolean' ? value : fallback;
+}
+
+function toSafeArray(value, fallback = []) {
+  if (!Array.isArray(value)) return [...fallback];
+  return value;
+}
+
+function inferBrand(productName, fallback = '기타') {
+  const name = normalizeText(productName);
+  if (!name) return fallback;
+  if (name.includes('apple') || name.includes('맥북') || name.includes('macbook')) return '애플';
+  if (name.includes('삼성') || name.includes('galaxy') || name.includes('갤럭시')) return '삼성';
+  if (name.includes('lg') || name.includes('그램')) return 'LG';
+  if (name.includes('asus') || name.includes('에이수스') || name.includes('rog') || name.includes('tuf')) return 'ASUS';
+  if (name.includes('레노버') || name.includes('lenovo') || name.includes('씽크패드') || name.includes('thinkpad')) return '레노버';
+  if (name.includes('msi')) return 'MSI';
+  if (name.includes('hp') || name.includes('오멘') || name.includes('victus')) return 'HP';
+  if (name.includes('dell') || name.includes('xps') || name.includes('alienware')) return 'Dell';
+  return fallback;
+}
+
+function inferCpuType(cpuText) {
+  const cpu = normalizeText(cpuText);
+  if (!cpu) return 'intel';
+  if (cpu.includes('ryzen') || cpu.includes('amd')) return 'amd';
+  if (cpu.includes('m1') || cpu.includes('m2') || cpu.includes('m3') || cpu.includes('m4') || cpu.includes('apple')) return 'apple';
+  return 'intel';
+}
+
+function inferLaptopCategory(rawCategory, nameText) {
+  const allowed = new Set(['gaming', 'ultrabook', 'business', 'creator', 'budget', 'apple']);
+  if (allowed.has(rawCategory)) return rawCategory;
+
+  const name = normalizeText(nameText);
+  if (name.includes('맥북') || name.includes('macbook')) return 'apple';
+  if (name.includes('게이밍') || name.includes('gaming') || name.includes('rtx') || name.includes('rog') || name.includes('tuf') || name.includes('omen') || name.includes('victus')) return 'gaming';
+  if (name.includes('크리에이터') || name.includes('creator') || name.includes('studio')) return 'creator';
+  if (name.includes('울트라') || name.includes('ultra') || name.includes('그램') || name.includes('zenbook') || name.includes('air')) return 'ultrabook';
+  if (name.includes('비즈니스') || name.includes('business') || name.includes('씽크패드') || name.includes('thinkpad')) return 'business';
+  return 'budget';
+}
+
+function inferMonitorCategory(rawCategory, nameText) {
+  const allowed = new Set(['gaming', 'professional', 'ultrawide', 'general', 'portable']);
+  if (allowed.has(rawCategory)) return rawCategory;
+
+  const name = normalizeText(nameText);
+  if (name.includes('울트라와이드') || name.includes('ultrawide') || name.includes('219') || name.includes('329')) return 'ultrawide';
+  if (name.includes('게이밍') || name.includes('gaming') || name.includes('144') || name.includes('165') || name.includes('240')) return 'gaming';
+  if (name.includes('4k') || name.includes('oled') || name.includes('pro') || name.includes('전문') || name.includes('색')) return 'professional';
+  if (name.includes('portable') || name.includes('휴대')) return 'portable';
+  return 'general';
+}
+
+function inferDesktopCategory(rawCategory, nameText) {
+  const allowed = new Set(['gaming', 'workstation', 'minipc', 'allinone', 'office', 'mac', 'creator']);
+  if (allowed.has(rawCategory)) return rawCategory;
+
+  const name = normalizeText(nameText);
+  if (name.includes('맥') || name.includes('imac') || name.includes('macmini')) return 'mac';
+  if (name.includes('미니pc') || name.includes('minipc') || name.includes('nuc') || name.includes('타이니')) return 'minipc';
+  if (name.includes('올인원') || name.includes('allinone')) return 'allinone';
+  if (name.includes('게이밍') || name.includes('gaming') || name.includes('rtx')) return 'gaming';
+  if (name.includes('크리에이터') || name.includes('creator') || name.includes('workstation')) return 'creator';
+  return 'office';
+}
+
+function defaultLaptopSpecs(category) {
+  if (category === 'apple') {
+    return {
+      cpu: 'Apple M4',
+      cpuType: 'apple',
+      gpu: 'Apple GPU',
+      ram: 16,
+      ramType: 'Unified',
+      storage: 512,
+      storageType: 'SSD',
+      display: 'Liquid Retina',
+      displaySize: 14,
+      weight: 1.4,
+      battery: '최대 18시간',
+    };
+  }
+  if (category === 'gaming') {
+    return {
+      cpu: 'Intel Core i7',
+      cpuType: 'intel',
+      gpu: 'NVIDIA RTX 4060',
+      ram: 16,
+      ramType: 'DDR5',
+      storage: 512,
+      storageType: 'SSD',
+      display: 'FHD 144Hz',
+      displaySize: 16,
+      weight: 2.3,
+      battery: '최대 8시간',
+    };
+  }
+  return {
+    cpu: 'Intel Core i5',
+    cpuType: 'intel',
+    gpu: '내장 그래픽',
+    ram: 16,
+    ramType: 'LPDDR5',
+    storage: 512,
+    storageType: 'SSD',
+    display: 'FHD',
+    displaySize: 15.6,
+    weight: 1.6,
+    battery: '최대 12시간',
+  };
+}
+
+function defaultMonitorSpecs() {
+  return {
+    panelType: 'IPS',
+    resolution: '1920x1080',
+    resolutionLabel: 'FHD',
+    refreshRate: 60,
+    responseTime: '5ms',
+    screenSize: 27,
+    aspectRatio: '16:9',
+    hdr: 'HDR 미지원',
+    colorGamut: 'sRGB 99%',
+    ports: ['HDMI'],
+    speakers: false,
+    heightAdjust: false,
+    pivot: false,
+    vesa: true,
+    curved: false,
+    curvature: undefined,
+  };
+}
+
+function defaultDesktopSpecs(category) {
+  if (category === 'mac') {
+    return {
+      cpu: 'Apple M4',
+      cpuType: 'apple',
+      gpu: 'Apple GPU',
+      ram: 16,
+      ramType: 'Unified',
+      storage: 512,
+      storageType: 'SSD',
+      formFactor: '미니PC',
+      psu: '내장',
+      os: 'macOS',
+      includedMonitor: '',
+      expansion: ['Thunderbolt', 'USB-C'],
+    };
+  }
+  return {
+    cpu: 'Intel Core i5',
+    cpuType: 'intel',
+    gpu: 'Intel UHD Graphics',
+    ram: 16,
+    ramType: 'DDR5',
+    storage: 512,
+    storageType: 'SSD',
+    formFactor: '미들타워',
+    psu: '500W',
+    os: 'FreeDOS',
+    includedMonitor: '',
+    expansion: ['USB 3.2'],
+  };
+}
+
+function normalizeProductShape(productType, product) {
+  const source = product && typeof product === 'object' ? product : {};
+  const stores = Array.isArray(source.stores) ? source.stores : [];
+  const fallbackPrice = toNumber(stores[0]?.price || stores[0]?.rawPrice);
+  const pricesRaw = source.prices && typeof source.prices === 'object' ? source.prices : {};
+
+  const current = toNumber(pricesRaw.current) || fallbackPrice;
+  const original = Math.max(current, toNumber(pricesRaw.original) || current);
+  const lowest = Math.min(current || toNumber(pricesRaw.lowest) || original, toNumber(pricesRaw.lowest) || current || original);
+  const average = Math.max(current || original, toNumber(pricesRaw.average) || current || original);
+  const discountAmount = Math.max(0, original - current);
+  const discountPercent = original > current ? Math.round((discountAmount / original) * 100) : 0;
+
+  const name = toSafeString(source.name, '상품 정보 준비중');
+  const brand = toSafeString(source.brand, inferBrand(name));
+  const model = toSafeString(source.model, name);
+  const images = toSafeArray(source.images, []).filter((x) => typeof x === 'string' && x);
+  const tags = toSafeArray(source.tags, []).filter((x) => typeof x === 'string' && x);
+
+  const normalized = {
+    ...source,
+    productType,
+    name,
+    brand,
+    model,
+    prices: {
+      original,
+      current,
+      lowest: lowest || current || original,
+      average,
+    },
+    discount: {
+      percent: toNumber(source.discount?.percent) || discountPercent,
+      amount: toNumber(source.discount?.amount) || discountAmount,
+    },
+    priceIndex: toNumber(source.priceIndex) || 70,
+    rating: {
+      score: Number.isFinite(Number(source.rating?.score)) ? Number(source.rating.score) : 4.3,
+      count: toNumber(source.rating?.count),
+    },
+    reviews: Array.isArray(source.reviews) ? source.reviews : [],
+    stock: ['in', 'low', 'out'].includes(String(source.stock)) ? source.stock : 'in',
+    isNew: toSafeBool(source.isNew, false),
+    isHot: toSafeBool(source.isHot, false),
+    releaseDate: toSafeString(source.releaseDate, new Date().toISOString().slice(0, 7)),
+    images: images.length > 0 ? images : [''],
+    tags,
+  };
+
+  if (productType === 'laptop') {
+    const category = inferLaptopCategory(source.category, name);
+    const defaults = defaultLaptopSpecs(category);
+    const specs = source.specs && typeof source.specs === 'object' ? source.specs : {};
+    const cpu = toSafeString(specs.cpu, defaults.cpu);
+
+    return {
+      ...normalized,
+      category,
+      specs: {
+        cpu,
+        cpuType: ['intel', 'amd', 'apple'].includes(specs.cpuType) ? specs.cpuType : inferCpuType(cpu),
+        gpu: toSafeString(specs.gpu, defaults.gpu),
+        ram: toNumber(specs.ram) || defaults.ram,
+        ramType: toSafeString(specs.ramType, defaults.ramType),
+        storage: toNumber(specs.storage) || defaults.storage,
+        storageType: toSafeString(specs.storageType, defaults.storageType),
+        display: toSafeString(specs.display, defaults.display),
+        displaySize: Number.isFinite(Number(specs.displaySize)) ? Number(specs.displaySize) : defaults.displaySize,
+        weight: Number.isFinite(Number(specs.weight)) ? Number(specs.weight) : defaults.weight,
+        battery: toSafeString(specs.battery, defaults.battery),
+      },
+    };
+  }
+
+  if (productType === 'monitor') {
+    const category = inferMonitorCategory(source.category, name);
+    const defaults = defaultMonitorSpecs();
+    const specs = source.specs && typeof source.specs === 'object' ? source.specs : {};
+    return {
+      ...normalized,
+      category,
+      specs: {
+        panelType: ['IPS', 'VA', 'OLED', 'TN', 'Mini LED', 'QD-OLED', 'IPS Black'].includes(specs.panelType) ? specs.panelType : defaults.panelType,
+        resolution: toSafeString(specs.resolution, defaults.resolution),
+        resolutionLabel: toSafeString(specs.resolutionLabel, defaults.resolutionLabel),
+        refreshRate: toNumber(specs.refreshRate) || defaults.refreshRate,
+        responseTime: toSafeString(specs.responseTime, defaults.responseTime),
+        screenSize: Number.isFinite(Number(specs.screenSize)) ? Number(specs.screenSize) : defaults.screenSize,
+        aspectRatio: toSafeString(specs.aspectRatio, defaults.aspectRatio),
+        hdr: toSafeString(specs.hdr, defaults.hdr),
+        colorGamut: toSafeString(specs.colorGamut, defaults.colorGamut),
+        ports: Array.isArray(specs.ports) ? specs.ports : defaults.ports,
+        speakers: typeof specs.speakers === 'boolean' ? specs.speakers : defaults.speakers,
+        heightAdjust: typeof specs.heightAdjust === 'boolean' ? specs.heightAdjust : defaults.heightAdjust,
+        pivot: typeof specs.pivot === 'boolean' ? specs.pivot : defaults.pivot,
+        vesa: typeof specs.vesa === 'boolean' ? specs.vesa : defaults.vesa,
+        curved: typeof specs.curved === 'boolean' ? specs.curved : defaults.curved,
+        curvature: toSafeString(specs.curvature, defaults.curvature),
+      },
+    };
+  }
+
+  const category = inferDesktopCategory(source.category, name);
+  const defaults = defaultDesktopSpecs(category);
+  const specs = source.specs && typeof source.specs === 'object' ? source.specs : {};
+  const cpu = toSafeString(specs.cpu, defaults.cpu);
+  return {
+    ...normalized,
+    category,
+    specs: {
+      cpu,
+      cpuType: ['intel', 'amd', 'apple'].includes(specs.cpuType) ? specs.cpuType : inferCpuType(cpu),
+      gpu: toSafeString(specs.gpu, defaults.gpu),
+      ram: toNumber(specs.ram) || defaults.ram,
+      ramType: toSafeString(specs.ramType, defaults.ramType),
+      storage: toNumber(specs.storage) || defaults.storage,
+      storageType: toSafeString(specs.storageType, defaults.storageType),
+      formFactor: toSafeString(specs.formFactor, defaults.formFactor),
+      psu: toSafeString(specs.psu, defaults.psu),
+      os: toSafeString(specs.os, defaults.os),
+      includedMonitor: toSafeString(specs.includedMonitor, defaults.includedMonitor),
+      expansion: Array.isArray(specs.expansion) ? specs.expansion : defaults.expansion,
+    },
+  };
+}
+
 function buildOfferId(productId, storeName, sourceUrl) {
   const seed = `${productId || ''}|${storeName || ''}|${canonicalizeUrl(sourceUrl || '')}`;
   const hash = crypto.createHash('sha1').update(seed).digest('hex').slice(0, 18);
@@ -1073,7 +1373,8 @@ function prepareCatalogForResponse(productType, options = {}) {
   const products = [];
 
   for (const product of catalog.products || []) {
-    const stores = (product.stores || []).map((store) => toPublicStore(store));
+    const normalizedProduct = normalizeProductShape(productType, product);
+    const stores = (normalizedProduct.stores || []).map((store) => toPublicStore(store));
 
     const visibleStores = verifiedOnly
       ? stores.filter((store) => store.verificationStatus === 'verified' && store.isActive && store.verifiedPrice > 0)
@@ -1093,17 +1394,17 @@ function prepareCatalogForResponse(productType, options = {}) {
       continue;
     }
 
-    const original = Math.max(toNumber(product?.prices?.original), lowest || 0);
+    const original = Math.max(toNumber(normalizedProduct?.prices?.original), lowest || 0);
     const discount = computeDiscount(original, lowest);
 
     const nextProduct = {
-      ...product,
+      ...normalizedProduct,
       prices: {
-        ...product.prices,
-        current: lowest || toNumber(product?.prices?.current),
+        ...normalizedProduct.prices,
+        current: lowest || toNumber(normalizedProduct?.prices?.current),
         original,
-        lowest: Math.min(toNumber(product?.prices?.lowest) || lowest || original, lowest || original),
-        average: Math.max(toNumber(product?.prices?.average) || 0, lowest || 0),
+        lowest: Math.min(toNumber(normalizedProduct?.prices?.lowest) || lowest || original, lowest || original),
+        average: Math.max(toNumber(normalizedProduct?.prices?.average) || 0, lowest || 0),
       },
       discount,
       stores: visibleStores,
