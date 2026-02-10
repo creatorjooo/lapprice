@@ -4,7 +4,8 @@ services:
     runtime: node
     plan: free
     region: singapore
-    buildCommand: npm install --include=dev && npm run build
+    nodeVersion: "20"
+    buildCommand: npm install --include=dev && npx vite build
     startCommand: node server/index.js
     envVars:
       # 네이버 쇼핑 API
