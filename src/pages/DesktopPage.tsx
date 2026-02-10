@@ -4,12 +4,24 @@ import { Star, TrendingDown, ChevronDown, ChevronUp, ExternalLink, Zap, BarChart
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
-import { desktops as staticDesktops, desktopCategories, desktopSortOptions } from '@/data/desktops';
-import { useProducts } from '@/hooks/useProducts';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from '@/components/ui/dialog';
+import ProductImage from '@/components/ProductImage';
+import PriceHistoryChart from '@/components/PriceHistoryChart';
+import { desktops as staticDesktops, desktopCategories, desktopSortOptions, desktopPriceHistory } from '@/data/desktops';
+import { usePriceHistory, useProducts } from '@/hooks/useProducts';
 import { useAffiliateBatch, isCoupangUrl } from '@/hooks/useAffiliateLink';
+import { useVerifiedRedirect } from '@/hooks/useVerifiedRedirect';
 import { trackAffiliateClick, getPlatformKey, isAffiliatePlatform } from '@/utils/tracking';
+import { getStoreHref, getStoreTrackingUrl, getStoreVerifiedPrice, isStoreVerified } from '@/utils/offers';
 import { cn } from '@/lib/utils';
-import type { Desktop, DesktopFilterState } from '@/types';
+import { formatStoreUpdatedAt } from '@/utils/time';
+import type { Desktop, DesktopFilterState, PriceHistory } from '@/types';
 
 interface DesktopPageProps {
   wishlist: string[];
@@ -39,7 +51,26 @@ export default function DesktopPage({
 
   // API 자동 데이터 + 정적 데이터 fallback
   const { products: apiDesktops, isLoading: isApiLoading, isFromApi, lastSync, refresh } = useProducts<Desktop>('desktop');
-  const desktops = isFromApi && apiDesktops.length > 0 ? apiDesktops : staticDesktops;
+  const desktops = useMemo(() => {
+    if (!isFromApi) return staticDesktops;
+    if (apiDesktops.length === 0) return [];
+
+    // API 데이터에서 특정 카테고리가 비면 정적 큐레이션으로 채워 탭 공백 방지
+    const requiredCategories: Desktop['category'][] = ['gaming', 'mac', 'minipc', 'allinone', 'office'];
+    const existingCategories = new Set(apiDesktops.map((d) => d.category));
+    const fallback = staticDesktops.filter((d) => !existingCategories.has(d.category));
+    const apiIds = new Set(apiDesktops.map((d) => d.id));
+    const dedupedFallback = fallback.filter((d) => !apiIds.has(d.id));
+
+    // 여전히 비는 카테고리가 있으면 해당 카테고리 제품만 추가
+    const merged = [...apiDesktops, ...dedupedFallback];
+    const mergedCategories = new Set(merged.map((d) => d.category));
+    const stillMissing = requiredCategories.filter((cat) => !mergedCategories.has(cat));
+    if (stillMissing.length === 0) return merged;
+
+    const emergencyFill = staticDesktops.filter((d) => stillMissing.includes(d.category) && !apiIds.has(d.id));
+    return [...merged, ...emergencyFill];
+  }, [apiDesktops, isFromApi]);
 
   const sectionToCategory: Record<string, string> = {
     'desk-gaming': 'gaming',
@@ -48,6 +79,14 @@ export default function DesktopPage({
     'desk-allinone': 'allinone',
     'desk-office': 'office',
     'desk-creator': 'creator',
+  };
+  const categoryToSection: Record<string, string> = {
+    gaming: 'desk-gaming',
+    mac: 'desk-mac',
+    minipc: 'desk-mini',
+    allinone: 'desk-allinone',
+    office: 'desk-office',
+    creator: 'desk-creator',
   };
   const mappedCategory = category ? (sectionToCategory[category] || category) : null;
 
@@ -74,12 +113,17 @@ export default function DesktopPage({
 
   const handleCategorySelect = useCallback((cat: string) => {
     if (onNavigateToPage) {
-      onNavigateToPage(`desktop-${cat}`);
+      if (cat === 'all') {
+        onNavigateToPage('desktop');
+        return;
+      }
+      const section = categoryToSection[cat] || cat;
+      onNavigateToPage(`desktop-${section}`);
     } else {
       setFilters(prev => ({ ...prev, category: cat === 'all' ? [] : [cat] }));
       productListRef.current?.scrollIntoView({ behavior: 'smooth' });
     }
-  }, [onNavigateToPage]);
+  }, [categoryToSection, onNavigateToPage]);
 
   const filteredDesktops = useMemo(() => {
     let result = [...desktops];
@@ -174,7 +218,8 @@ export default function DesktopPage({
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
               {filteredDesktops.map((desktop) => {
                 const isWishlisted = wishlist.includes(desktop.id);
-                const isCompared = compareList.includes(desktop.id);
+                const compareKey = `desktop:${desktop.id}`;
+                const isCompared = compareList.includes(compareKey);
                 return (
                   <Card key={desktop.id} className="overflow-hidden hover:shadow-lg transition-shadow">
                     <div className="p-6">
@@ -187,7 +232,7 @@ export default function DesktopPage({
                           <button onClick={() => onToggleWishlist(desktop.id)} className={cn("p-1.5 rounded-full", isWishlisted ? "text-red-500" : "text-slate-300 hover:text-red-400")}>
                             <Heart className="w-4 h-4" fill={isWishlisted ? 'currentColor' : 'none'} />
                           </button>
-                          <button onClick={() => onToggleCompare(desktop.id)} className={cn("p-1.5 rounded-full", isCompared ? "text-blue-500" : "text-slate-300 hover:text-blue-400")}>
+                          <button onClick={() => onToggleCompare(compareKey)} className={cn("p-1.5 rounded-full", isCompared ? "text-blue-500" : "text-slate-300 hover:text-blue-400")}>
                             <BarChart3 className="w-4 h-4" />
                           </button>
                           <button onClick={() => onSetPriceAlert(desktop.id)} className="p-1.5 rounded-full text-slate-300 hover:text-amber-400">
@@ -195,7 +240,12 @@ export default function DesktopPage({
                           </button>
                         </div>
                       </div>
-                      {desktop.images?.[0] && <img src={desktop.images[0]} alt={desktop.name} className="w-full h-40 object-contain mb-3 rounded" />}
+                      <ProductImage
+                        src={desktop.images?.[0]}
+                        alt={desktop.name}
+                        className="w-full h-40 object-contain mb-3 rounded"
+                        fallbackText={desktop.name}
+                      />
                       <div className="flex items-end gap-2 mb-3">
                         <span className="text-2xl font-bold text-slate-900">{desktop.prices.current.toLocaleString()}원</span>
                         {desktop.discount.percent > 0 && <Badge variant="destructive" className="text-xs">-{desktop.discount.percent}%</Badge>}
@@ -205,13 +255,15 @@ export default function DesktopPage({
                       </div>
                       <div className="flex gap-2">
                         {desktop.stores?.slice(0, 2).map((store, idx) => {
-                          const platform = getPlatformKey(store.url);
+                          const href = getStoreHref(store);
+                          const trackingUrl = getStoreTrackingUrl(store) || href;
+                          const platform = getPlatformKey(store.store);
                           return (
-                            <a key={idx} href={store.url} target="_blank" rel="noopener noreferrer"
-                              onClick={() => { if (isAffiliatePlatform(platform)) trackAffiliateClick({ productId: desktop.id, platform, source: 'productcard', url: store.url, productName: desktop.name }); }}
+                            <a key={idx} href={href} target="_blank" rel="noopener noreferrer"
+                              onClick={() => { if (isAffiliatePlatform(store.store)) trackAffiliateClick({ productId: desktop.id, platform, source: 'productcard', url: trackingUrl, productName: desktop.name }); }}
                               className="flex-1 text-center py-2 text-sm font-medium bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors"
                             >
-                              {isCoupangUrl(store.url) ? '쿠팡' : store.store || '최저가 보기'} <ExternalLink className="w-3 h-3 inline ml-1" />
+                              {isCoupangUrl(trackingUrl) ? '쿠팡' : store.store || '최저가 보기'} <ExternalLink className="w-3 h-3 inline ml-1" />
                             </a>
                           );
                         })}
@@ -374,7 +426,7 @@ export default function DesktopPage({
                 key={desktop.id}
                 desktop={desktop}
                 isWishlisted={wishlist.includes(desktop.id)}
-                isCompared={compareList.includes(desktop.id)}
+                isCompared={compareList.includes(`desktop:${desktop.id}`)}
                 onToggleWishlist={onToggleWishlist}
                 onToggleCompare={onToggleCompare}
                 onSetPriceAlert={onSetPriceAlert}
@@ -417,27 +469,42 @@ function DesktopProductCard({
   onSetPriceAlert: (id: string) => void;
 }) {
   const [isExpanded, setIsExpanded] = useState(false);
+  const [showPriceHistory, setShowPriceHistory] = useState(false);
   const savingsPercent = Math.round(((desktop.prices.original - desktop.prices.current) / desktop.prices.original) * 100);
   const isPriceGood = desktop.priceIndex >= 80;
+  const staticPriceHistory = desktopPriceHistory[desktop.id] || [];
+  const { history: apiPriceHistory } = usePriceHistory(showPriceHistory ? desktop.id : null);
+  const { openVerifiedLink, redirectError, clearRedirectError } = useVerifiedRedirect();
+  const chartData: PriceHistory[] = (apiPriceHistory.length > 0 ? apiPriceHistory : staticPriceHistory).length > 0
+    ? (apiPriceHistory.length > 0 ? apiPriceHistory : staticPriceHistory)
+    : [{ date: '오늘', price: desktop.prices.current, store: '현재가' }];
 
-  // 어필리에이트 링크 변환
-  const storeUrls = desktop.stores.map(s => s.url);
-  const affiliateUrls = useAffiliateBatch(storeUrls, `desktop_${desktop.id}`);
+  // 검증 스토어 우선(정적 fallback은 기존 전체 노출)
+  const sortedStores = useMemo(() => {
+    const hasVerificationState = desktop.stores.some((store) => !!store.verificationStatus);
+    const baseStores = hasVerificationState
+      ? desktop.stores.filter((store) => store.verificationStatus === 'verified' && store.isActive !== false)
+      : desktop.stores;
 
-  // 어필리에이트 스토어 우선 정렬
-  const sortedStores = [...desktop.stores].sort((a, b) => {
-    const aIsAffiliate = isAffiliatePlatform(a.store) || isCoupangUrl(a.url);
-    const bIsAffiliate = isAffiliatePlatform(b.store) || isCoupangUrl(b.url);
-    if (aIsAffiliate && !bIsAffiliate) return -1;
-    if (!aIsAffiliate && bIsAffiliate) return 1;
-    return a.price - b.price;
-  });
+    return [...baseStores].sort((a, b) => getStoreVerifiedPrice(a) - getStoreVerifiedPrice(b));
+  }, [desktop.stores]);
 
-  const affiliateStore = sortedStores.find(s => isAffiliatePlatform(s.store) || isCoupangUrl(s.url));
-  const lowestStore = sortedStores.reduce((min, s) => s.price < min.price ? s : min, sortedStores[0]);
-  const ctaStore = affiliateStore || lowestStore;
-  const ctaStoreIdx = desktop.stores.indexOf(ctaStore);
-  const ctaUrl = (affiliateUrls as Record<number, string>)[ctaStoreIdx] || ctaStore.url;
+  const storeUrls = useMemo(() => sortedStores.map((store) => getStoreTrackingUrl(store)), [sortedStores]);
+  const { affiliateUrls } = useAffiliateBatch(storeUrls, `desktop_${desktop.id}`);
+
+  const ctaStore = sortedStores[0];
+  const ctaStoreIdx = ctaStore ? sortedStores.indexOf(ctaStore) : -1;
+  const ctaHref = useMemo(() => {
+    if (!ctaStore) return undefined;
+    const baseHref = getStoreHref(ctaStore);
+    if (baseHref.startsWith('/r/')) return baseHref;
+    return ctaStoreIdx >= 0 ? ((affiliateUrls as Record<number, string>)[ctaStoreIdx] || baseHref) : baseHref;
+  }, [ctaStore, ctaStoreIdx, affiliateUrls]);
+  const ctaTrackingUrl = ctaStore ? getStoreTrackingUrl(ctaStore) : '';
+  const absoluteLowestPrice = useMemo(
+    () => (sortedStores.length > 0 ? Math.min(...sortedStores.map((store) => getStoreVerifiedPrice(store))) : 0),
+    [sortedStores],
+  );
 
   // 구매 타이밍 어드바이저
   const timingAdvice = desktop.prices.current <= desktop.prices.lowest
@@ -452,14 +519,17 @@ function DesktopProductCard({
   const imageUrl = desktop.images?.[0]?.startsWith('http') ? desktop.images[0] : null;
   const emojiIcon = desktop.category === 'minipc' ? '📦' : desktop.category === 'allinone' ? '🖥️' : '🖥️';
 
-  const handleCtaClick = () => {
+  const handleCtaClick = async () => {
+    if (!ctaStore || !ctaHref) return;
+    clearRedirectError();
     trackAffiliateClick({
       productId: desktop.id,
       platform: getPlatformKey(ctaStore.store),
       source: 'cta_button',
-      url: ctaUrl,
+      url: ctaTrackingUrl || ctaHref,
       productName: desktop.name,
     });
+    await openVerifiedLink(ctaHref);
   };
 
   const handleStoreClick = (store: typeof desktop.stores[0], url: string) => {
@@ -484,7 +554,7 @@ function DesktopProductCard({
         <Button variant="secondary" size="icon" className="w-7 h-7 rounded-full bg-white/90" onClick={() => onToggleWishlist(desktop.id)}>
           <Heart className={cn('w-3.5 h-3.5', isWishlisted && 'fill-rose-500 text-rose-500')} />
         </Button>
-        <Button variant="secondary" size="icon" className={cn('w-7 h-7 rounded-full bg-white/90', isCompared && 'ring-2 ring-emerald-500')} onClick={() => onToggleCompare(desktop.id)}>
+        <Button variant="secondary" size="icon" className={cn('w-7 h-7 rounded-full bg-white/90', isCompared && 'ring-2 ring-emerald-500')} onClick={() => onToggleCompare(`desktop:${desktop.id}`)}>
           <BarChart3 className="w-3.5 h-3.5" />
         </Button>
       </div>
@@ -495,10 +565,14 @@ function DesktopProductCard({
             <Badge className="bg-gradient-to-r from-emerald-500 to-teal-500 text-white text-[10px] font-bold px-2 py-0.5 shadow-md">{desktop.editorPick}</Badge>
           </div>
         )}
-        {imageUrl ? (
-          <img src={imageUrl} alt={desktop.name} className="w-full h-full object-contain p-2" loading="lazy" />
-        ) : (
-          <div className="text-4xl lg:text-5xl">{emojiIcon}</div>
+        <ProductImage
+          src={imageUrl || desktop.images?.[0]}
+          alt={desktop.name}
+          className="w-full h-full object-contain p-2"
+          fallbackText={desktop.name}
+        />
+        {!imageUrl && !desktop.images?.[0] && (
+          <div className="absolute inset-0 flex items-center justify-center text-4xl lg:text-5xl pointer-events-none">{emojiIcon}</div>
         )}
         <div className="absolute bottom-2 left-2 flex gap-1">
           <Badge className={cn('text-[10px] font-bold px-1.5 py-0 h-5', isPriceGood ? 'bg-emerald-500/90 text-white' : 'bg-amber-500/90 text-white')}>
@@ -556,44 +630,66 @@ function DesktopProductCard({
           <p className="text-[10px] text-slate-400 mt-0.5">역대최저 {desktop.prices.lowest.toLocaleString()}원</p>
         </div>
 
-        <a
-          href={ctaUrl}
-          target="_blank"
-          rel="noopener noreferrer"
-          onClick={handleCtaClick}
-          className="flex items-center justify-center gap-1.5 w-full h-9 mb-2 rounded-lg bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white text-xs font-semibold transition-all shadow-sm hover:shadow-md"
-        >
-          <Zap className="w-3.5 h-3.5" />
-          {ctaStore.store}에서 {ctaStore.price.toLocaleString()}원
-          {(isAffiliatePlatform(ctaStore.store) || isCoupangUrl(ctaStore.url)) && <span className="text-[9px] bg-white/20 px-1 rounded">제휴</span>}
-          <ExternalLink className="w-3 h-3 opacity-60" />
-        </a>
+        {ctaStore && (
+          <button
+            type="button"
+            onClick={handleCtaClick}
+            className="flex items-center justify-center gap-1.5 w-full h-9 mb-2 rounded-lg bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white text-xs font-semibold transition-all shadow-sm hover:shadow-md"
+          >
+            <Zap className="w-3.5 h-3.5" />
+            {ctaStore.store}에서 {getStoreVerifiedPrice(ctaStore).toLocaleString()}원
+            {(isAffiliatePlatform(ctaStore.store) || isCoupangUrl(ctaTrackingUrl)) && <span className="text-[9px] bg-white/20 px-1 rounded">제휴</span>}
+            <ExternalLink className="w-3 h-3 opacity-60" />
+          </button>
+        )}
+
+        {redirectError && (
+          <p className="text-[10px] text-rose-600 mb-2">{redirectError}</p>
+        )}
 
         <div className="space-y-1 mb-2">
           {sortedStores.slice(0, isExpanded ? undefined : 2).map((store, idx) => {
-            const origIdx = desktop.stores.indexOf(store);
-            const storeUrl = (affiliateUrls as Record<number, string>)[origIdx] || store.url;
-            const isAff = isAffiliatePlatform(store.store) || isCoupangUrl(store.url);
+            const baseHref = getStoreHref(store);
+            const trackingUrl = getStoreTrackingUrl(store) || baseHref;
+            const storeUrl = baseHref.startsWith('/r/')
+              ? baseHref
+              : ((affiliateUrls as Record<number, string>)[idx] || baseHref);
+            const isAff = isAffiliatePlatform(store.store) || isCoupangUrl(trackingUrl);
+            const storePrice = getStoreVerifiedPrice(store);
             return (
-              <a key={idx} href={storeUrl} target="_blank" rel="noopener noreferrer"
-                onClick={() => handleStoreClick(store, storeUrl)}
-                className={cn('flex items-center justify-between p-1.5 rounded-md transition-colors', isAff ? 'bg-emerald-50 hover:bg-emerald-100' : 'bg-slate-50 hover:bg-slate-100')}
+              <button
+                type="button"
+                key={idx}
+                onClick={async () => {
+                  clearRedirectError();
+                  handleStoreClick(store, trackingUrl);
+                  await openVerifiedLink(storeUrl);
+                }}
+                className={cn('flex w-full items-center justify-between p-1.5 rounded-md transition-colors text-left', isAff ? 'bg-emerald-50 hover:bg-emerald-100' : 'bg-slate-50 hover:bg-slate-100')}
               >
                 <div className="flex items-center gap-1.5">
                   <span className="text-sm">{store.storeLogo}</span>
                   <div>
                     <p className="text-xs font-medium flex items-center gap-1">
                       {store.store}
+                      {storePrice === absoluteLowestPrice && <span className="text-[9px] bg-emerald-100 text-emerald-600 px-1 rounded">최저가</span>}
                       {isAff && <span className="text-[9px] bg-blue-100 text-blue-600 px-1 rounded">제휴</span>}
                     </p>
-                    <p className="text-[10px] text-slate-400">{store.updatedAt}</p>
+                    <p className="text-[10px] text-slate-400">
+                      {isStoreVerified(store)
+                        ? `검증 ${formatStoreUpdatedAt(store.verifiedAt || store.updatedAt)}`
+                        : formatStoreUpdatedAt(store.updatedAt)}
+                    </p>
                   </div>
                 </div>
-                <p className="text-xs font-bold">{store.price.toLocaleString()}원</p>
-              </a>
+                <p className="text-xs font-bold">{storePrice.toLocaleString()}원</p>
+              </button>
             );
           })}
         </div>
+        <p className="text-[10px] text-slate-400 mb-2">
+          검증 완료된 가격만 노출되며, 클릭 시 최신가를 다시 확인합니다.
+        </p>
 
         {sortedStores.length > 2 && (
           <Button variant="ghost" size="sm" className="w-full h-7 text-xs mb-2" onClick={() => setIsExpanded(!isExpanded)}>
@@ -602,9 +698,24 @@ function DesktopProductCard({
         )}
 
         <div className="flex gap-1.5 mt-auto">
-          <Button variant="outline" size="sm" className="flex-1 h-8 text-xs" onClick={() => onSetPriceAlert(desktop.id)}>
-            <Bell className="w-3.5 h-3.5 mr-1" />
-            가격 알림
+          <Dialog open={showPriceHistory} onOpenChange={setShowPriceHistory}>
+            <DialogTrigger asChild>
+              <Button variant="outline" size="sm" className="flex-1 h-8 text-xs">
+                <BarChart3 className="w-3.5 h-3.5 mr-1" />
+                가격 추이
+              </Button>
+            </DialogTrigger>
+            <DialogContent className="max-w-2xl">
+              <DialogHeader>
+                <DialogTitle>{desktop.name} 가격 추이</DialogTitle>
+              </DialogHeader>
+              <div className="h-80 mt-4">
+                <PriceHistoryChart data={chartData} color="#059669" />
+              </div>
+            </DialogContent>
+          </Dialog>
+          <Button variant="outline" size="sm" className="h-8 px-2" onClick={() => onSetPriceAlert(desktop.id)}>
+            <Bell className="w-3.5 h-3.5" />
           </Button>
         </div>
       </div>

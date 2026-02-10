@@ -6,10 +6,20 @@ export interface StorePrice {
   store: string;
   storeLogo: string;
   price: number;
+  rawPrice?: number;
+  verifiedPrice?: number;
+  verifiedAt?: string | null;
+  verificationStatus?: 'verified' | 'failed' | 'stale';
+  verificationMethod?: 'api' | 'browser' | 'fallback';
   shipping: number;
   deliveryDays: string;
   updatedAt: string;
   url: string;
+  sourceUrl?: string;
+  offerId?: string;
+  isActive?: boolean;
+  lastErrorCode?: string | null;
+  lastErrorMessage?: string | null;
   isLowest: boolean;
 }
 

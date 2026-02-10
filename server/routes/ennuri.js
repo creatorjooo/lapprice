@@ -8,13 +8,14 @@ const { fetchWithUA, parsePrice, getCachedResult, setCachedResult } = require('.
  * GET /api/ennuri?keyword=노트북
  */
 router.get('/', async (req, res) => {
-  const { keyword } = req.query;
+  const { keyword, limit = '20' } = req.query;
 
   if (!keyword) {
     return res.status(400).json({ source: 'ennuri', available: false, products: [], error: '검색어 필요' });
   }
 
-  const cacheKey = `ennuri:${keyword}`;
+  const parsedLimit = Math.max(5, Math.min(100, parseInt(limit, 10) || 20));
+  const cacheKey = `ennuri:${keyword}:${parsedLimit}`;
   const cached = getCachedResult(cacheKey);
   if (cached) return res.json(cached);
 
@@ -36,7 +37,7 @@ router.get('/', async (req, res) => {
 
     // 에누리 검색 결과 파싱
     $('li.prod_item, .comm_prd_list li, .search_list li, .prod-list li').each((i, el) => {
-      if (i >= 20) return false;
+      if (i >= parsedLimit) return false;
       const $el = $(el);
       const title = $el.find('.prod_name a, .prd_name a, a.name, .tit a').text().trim();
       const priceText = $el.find('.price .num, .prd_price .price, .price_sect strong, .price strong').text().trim();

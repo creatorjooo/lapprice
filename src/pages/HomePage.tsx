@@ -4,6 +4,7 @@ import { ArrowRight, Monitor, Cpu, Laptop, ExternalLink, Zap } from 'lucide-reac
 import { Badge } from '@/components/ui/badge';
 import { getTopPicks, getHotDeals } from '@/data/index';
 import { trackAffiliateClick, getPlatformKey } from '@/utils/tracking';
+import { toImageSrc } from '@/utils/image';
 
 interface HomePageProps {
   onNavigateToPage: (page: string) => void;
@@ -205,7 +206,7 @@ export default function HomePage({ onNavigateToPage }: HomePageProps) {
                   <div className="flex items-start gap-4">
                     <div className="w-16 h-16 bg-gradient-to-br from-slate-100 to-slate-200 rounded-xl flex items-center justify-center text-3xl flex-shrink-0 overflow-hidden">
                       {product.images?.[0]?.startsWith('http') ? (
-                        <img src={product.images[0]} alt={product.name} className="w-full h-full object-contain" loading="lazy" />
+                        <img src={toImageSrc(product.images[0])} alt={product.name} className="w-full h-full object-contain" loading="lazy" decoding="async" referrerPolicy="no-referrer" />
                       ) : (
                         cat.emoji
                       )}
@@ -258,6 +259,9 @@ export default function HomePage({ onNavigateToPage }: HomePageProps) {
             {hotDeals.map((deal) => {
               const typeLabel = deal.productType === 'laptop' ? '💻 노트북' : deal.productType === 'monitor' ? '🖥️ 모니터' : '🖥️ 데스크탑';
               const pageHash = deal.productType;
+              const lowestStore = deal.stores && deal.stores.length > 0
+                ? deal.stores.reduce((min, s) => (s.price < min.price ? s : min), deal.stores[0])
+                : undefined;
               return (
                 <div
                   key={deal.id}
@@ -273,7 +277,7 @@ export default function HomePage({ onNavigateToPage }: HomePageProps) {
                   <div className="flex items-center gap-3">
                     <div className="w-14 h-14 bg-gradient-to-br from-slate-100 to-slate-200 rounded-xl flex items-center justify-center text-2xl flex-shrink-0 overflow-hidden">
                       {deal.images?.[0]?.startsWith('http') ? (
-                        <img src={deal.images[0]} alt={deal.name} className="w-full h-full object-contain" loading="lazy" />
+                        <img src={toImageSrc(deal.images[0])} alt={deal.name} className="w-full h-full object-contain" loading="lazy" decoding="async" referrerPolicy="no-referrer" />
                       ) : (
                         deal.productType === 'laptop' ? '💻' : deal.productType === 'monitor' ? '🖥️' : '🖥️'
                       )}
@@ -289,25 +293,25 @@ export default function HomePage({ onNavigateToPage }: HomePageProps) {
                       </div>
                     </div>
                   </div>
-                  {deal.stores?.[0] && (
+                  {lowestStore && (
                     <a
-                      href={deal.stores[0].url}
+                      href={lowestStore.url}
                       target="_blank"
                       rel="noopener noreferrer"
                       onClick={(e) => {
                         e.stopPropagation();
                         trackAffiliateClick({
                           productId: deal.id,
-                          platform: getPlatformKey(deal.stores[0].store),
+                          platform: getPlatformKey(lowestStore.store),
                           source: 'cta_button',
-                          url: deal.stores[0].url,
+                          url: lowestStore.url,
                           productName: deal.name,
                         });
                       }}
                       className="mt-3 flex items-center justify-center gap-1.5 w-full h-8 rounded-lg bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white text-xs font-semibold transition-all"
                     >
                       <Zap className="w-3.5 h-3.5" />
-                      {deal.stores[0].store} 최저가 구매
+                      {lowestStore.store} {lowestStore.price.toLocaleString()}원 구매
                       <ExternalLink className="w-3 h-3 opacity-60" />
                     </a>
                   )}

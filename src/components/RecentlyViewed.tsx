@@ -1,4 +1,5 @@
 import { ChevronRight } from 'lucide-react';
+import { toImageSrc } from '@/utils/image';
 
 interface RecentItem {
   id: string;
@@ -36,7 +37,7 @@ export default function RecentlyViewed({ items, onNavigateToPage }: RecentlyView
             >
               <div className="w-8 h-8 bg-slate-100 rounded flex items-center justify-center flex-shrink-0 overflow-hidden">
                 {item.image?.startsWith('http') ? (
-                  <img src={item.image} alt="" className="w-full h-full object-contain" />
+                  <img src={toImageSrc(item.image)} alt="" className="w-full h-full object-contain" loading="lazy" decoding="async" referrerPolicy="no-referrer" />
                 ) : (
                   <span className="text-sm">{emojiMap[item.productType] || '📦'}</span>
                 )}

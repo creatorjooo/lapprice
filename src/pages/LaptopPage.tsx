@@ -41,7 +41,7 @@ export default function LaptopPage({
 }: LaptopPageProps) {
   // API 자동 데이터 + 정적 데이터 fallback
   const { products: apiLaptops, isLoading: isApiLoading, isFromApi, lastSync, refresh } = useProducts<Laptop>('laptop');
-  const laptops = isFromApi && apiLaptops.length > 0 ? apiLaptops : staticLaptops;
+  const laptops = isFromApi ? apiLaptops : staticLaptops;
 
   const [, setCurrentView] = useState<'home' | 'store' | 'category'>('home');
 

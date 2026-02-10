@@ -13,13 +13,161 @@ import HomePage from './pages/HomePage';
 import LaptopPage from './pages/LaptopPage';
 import MonitorPage from './pages/MonitorPage';
 import DesktopPage from './pages/DesktopPage';
-import { laptops } from './data/laptops';
 import { findProductById, allProducts } from './data/index';
 import { useLocalStorage } from './hooks/useLocalStorage';
-import type { Laptop, PriceAlert } from './types';
+import type { Laptop, PriceAlert, Product } from './types';
 import './App.css';
 
 type PageType = 'home' | 'laptop' | 'monitor' | 'desktop' | 'admin';
+
+interface ExternalSearchCandidate {
+  source: string;
+  title: string;
+  price: number;
+  originalPrice?: number;
+  link: string;
+  image?: string;
+  mallName?: string;
+  query?: string;
+  productType?: 'laptop' | 'monitor' | 'desktop';
+}
+
+interface TrackedProductItem {
+  id: string;
+  source: string;
+  productType: 'laptop' | 'monitor' | 'desktop';
+  query: string;
+  title: string;
+  link: string;
+  image?: string;
+  mallName?: string;
+  lastPrice: number;
+  lastOriginalPrice?: number;
+}
+
+function trackedToProduct(item: TrackedProductItem): Product {
+  const common = {
+    id: item.id,
+    brand: (item.title || '').split(' ')[0] || '외부상품',
+    name: item.title,
+    model: item.title,
+    prices: {
+      original: item.lastOriginalPrice || item.lastPrice || 0,
+      current: item.lastPrice || 0,
+      lowest: item.lastPrice || 0,
+      average: item.lastPrice || 0,
+    },
+    discount: {
+      percent: item.lastOriginalPrice && item.lastOriginalPrice > item.lastPrice
+        ? Math.round(((item.lastOriginalPrice - item.lastPrice) / item.lastOriginalPrice) * 100)
+        : 0,
+      amount: item.lastOriginalPrice && item.lastOriginalPrice > item.lastPrice
+        ? (item.lastOriginalPrice - item.lastPrice)
+        : 0,
+    },
+    priceIndex: 70,
+    stores: [{
+      store: item.mallName || item.source,
+      storeLogo: '🛒',
+      price: item.lastPrice || 0,
+      shipping: 0,
+      deliveryDays: '확인 필요',
+      updatedAt: '실시간',
+      url: item.link,
+      isLowest: true,
+    }],
+    rating: { score: 0, count: 0 },
+    reviews: [],
+    stock: 'in' as const,
+    isNew: false,
+    isHot: false,
+    releaseDate: new Date().toISOString().slice(0, 7),
+    images: item.image ? [item.image] : [],
+    tags: ['외부검색', '추적상품'],
+    editorScore: undefined,
+    editorPick: '외부 추적',
+    editorComment: '외부 검색에서 추가된 추적 상품입니다.',
+    pros: [],
+    cons: [],
+    bestFor: '외부 가격 추적',
+  };
+
+  if (item.productType === 'monitor') {
+    return {
+      productType: 'monitor',
+      category: 'general',
+      specs: {
+        panelType: 'IPS',
+        resolution: '1920x1080',
+        resolutionLabel: 'FHD',
+        refreshRate: 60,
+        responseTime: '-',
+        screenSize: 27,
+        aspectRatio: '16:9',
+        hdr: '없음',
+        colorGamut: '-',
+        ports: [],
+        speakers: false,
+        heightAdjust: false,
+        pivot: false,
+        vesa: false,
+        curved: false,
+      },
+      ...common,
+    };
+  }
+
+  if (item.productType === 'desktop') {
+    return {
+      productType: 'desktop',
+      category: 'office',
+      specs: {
+        cpu: '-',
+        cpuType: 'intel',
+        gpu: '-',
+        ram: 16,
+        ramType: '-',
+        storage: 512,
+        storageType: '-',
+        formFactor: '미들타워',
+        psu: '-',
+        os: '-',
+        expansion: [],
+      },
+      ...common,
+    };
+  }
+
+  return {
+    productType: 'laptop',
+    category: 'budget',
+    specs: {
+      cpu: '-',
+      cpuType: 'intel',
+      gpu: '-',
+      ram: 16,
+      ramType: '-',
+      storage: 512,
+      storageType: '-',
+      display: '-',
+      displaySize: 15.6,
+      weight: 1.8,
+      battery: '-',
+    },
+    ...common,
+  };
+}
+
+function parseCompareKey(key: string): { kind: 'tracked' | 'catalog' | 'legacy'; productType?: string; id: string } {
+  if (key.startsWith('tracked:')) {
+    return { kind: 'tracked', id: key.replace('tracked:', '') };
+  }
+  if (key.includes(':')) {
+    const [productType, id] = key.split(':');
+    return { kind: 'catalog', productType, id };
+  }
+  return { kind: 'legacy', id: key };
+}
 
 function App() {
   // ─── 해시 라우팅 (카테고리 서브페이지 지원) ───
@@ -89,6 +237,7 @@ function App() {
   const [priceAlertLaptop, setPriceAlertLaptop] = useState<Laptop | null>(null);
   const [isPriceAlertModalOpen, setIsPriceAlertModalOpen] = useState(false);
   const [isAlertManagerOpen, setIsAlertManagerOpen] = useState(false);
+  const [trackedProducts, setTrackedProducts] = useState<TrackedProductItem[]>([]);
 
   // 목표가 도달 알림 확인
   useEffect(() => {
@@ -106,6 +255,21 @@ function App() {
   }, []);
 
   // ─── Handlers ───
+  const fetchTrackedProducts = useCallback(async () => {
+    try {
+      const response = await fetch('/api/tracked-products');
+      if (!response.ok) return;
+      const data = await response.json();
+      setTrackedProducts(Array.isArray(data.items) ? data.items : []);
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchTrackedProducts();
+  }, [fetchTrackedProducts]);
+
   const handleToggleWishlist = useCallback((id: string) => {
     setWishlist((prev) => {
       const isAdding = !prev.includes(id);
@@ -121,22 +285,29 @@ function App() {
   }, []);
 
   const handleToggleCompare = useCallback((id: string) => {
+    const parsed = parseCompareKey(id);
+    const productName =
+      parsed.kind === 'tracked'
+        ? (trackedProducts.find((p) => p.id === parsed.id)?.title || '외부 상품')
+        : parsed.kind === 'catalog'
+          ? (allProducts.find((p) => p.productType === parsed.productType && p.id === parsed.id)?.name || '상품')
+          : (findProductById(parsed.id)?.name || '상품');
+
     setCompareList((prev) => {
       const isAdding = !prev.includes(id);
-      const product = findProductById(id);
       if (isAdding) {
         if (prev.length >= 4) {
           toast.error('최대 4개까지 비교할 수 있습니다.');
           return prev;
         }
-        toast.success(`${product?.name}을(를) 비교 목록에 추가했습니다!`);
+        toast.success(`${productName}을(를) 비교 목록에 추가했습니다!`);
         return [...prev, id];
       } else {
-        toast.info(`${product?.name} 비교 목록에서 제거되었습니다.`);
+        toast.info(`${productName} 비교 목록에서 제거되었습니다.`);
         return prev.filter((item) => item !== id);
       }
     });
-  }, []);
+  }, [trackedProducts]);
 
   const handleClearCompare = useCallback(() => {
     setCompareList([]);
@@ -187,7 +358,74 @@ function App() {
   }, [currentPage, navigateToPage]);
 
   // ─── Compare 대상 (전 카테고리 통합) ───
-  const compareLaptops = allProducts.filter((p) => compareList.includes(p.id)) as Laptop[];
+  const trackedAsProducts = trackedProducts.map(trackedToProduct);
+  const compareProducts = compareList
+    .map((key) => {
+      const parsed = parseCompareKey(key);
+      if (parsed.kind === 'tracked') {
+        const tracked = trackedAsProducts.find((p) => p.id === parsed.id);
+        return tracked ? { ...tracked, id: key } : null;
+      }
+      if (parsed.kind === 'catalog') {
+        const product = allProducts.find((p) => p.productType === parsed.productType && p.id === parsed.id);
+        return product ? { ...product, id: key } : null;
+      }
+      const legacy = allProducts.find((p) => p.id === parsed.id);
+      return legacy ? { ...legacy, id: key } : null;
+    })
+    .filter(Boolean) as Product[];
+
+  const registerTrackedProduct = useCallback(async (candidate: ExternalSearchCandidate) => {
+    const response = await fetch('/api/tracked-products', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        source: candidate.source,
+        title: candidate.title,
+        link: candidate.link,
+        query: candidate.query || candidate.title,
+        image: candidate.image,
+        mallName: candidate.mallName,
+        price: candidate.price,
+        originalPrice: candidate.originalPrice || candidate.price,
+        productType: candidate.productType || 'laptop',
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error('추적 등록 실패');
+    }
+    const data = await response.json();
+    await fetchTrackedProducts();
+    return data.item as TrackedProductItem;
+  }, [fetchTrackedProducts]);
+
+  const handleTrackExternalProduct = useCallback(async (candidate: ExternalSearchCandidate) => {
+    try {
+      await registerTrackedProduct(candidate);
+      toast.success('외부 상품 추적이 추가되었습니다.');
+    } catch {
+      toast.error('추적 추가에 실패했습니다.');
+    }
+  }, [registerTrackedProduct]);
+
+  const handleAddExternalToCompare = useCallback(async (candidate: ExternalSearchCandidate) => {
+    try {
+      const tracked = await registerTrackedProduct(candidate);
+      setCompareList((prev) => {
+        const compareKey = `tracked:${tracked.id}`;
+        if (prev.includes(compareKey)) return prev;
+        if (prev.length >= 4) {
+          toast.error('최대 4개까지 비교할 수 있습니다.');
+          return prev;
+        }
+        return [...prev, compareKey];
+      });
+      toast.success('외부 상품을 비교 목록에 추가했습니다.');
+    } catch {
+      toast.error('외부 상품 비교 추가에 실패했습니다.');
+    }
+  }, [registerTrackedProduct, setCompareList]);
 
   // ─── 관리자 모드 ───
   if (currentPage === 'admin') {
@@ -219,6 +457,8 @@ function App() {
         onNavigateToPage={navigateToPage}
         onOpenAlertManager={() => setIsAlertManagerOpen(true)}
         onOpenCompare={() => setIsCompareModalOpen(true)}
+        onTrackExternalProduct={handleTrackExternalProduct}
+        onAddExternalToCompare={handleAddExternalToCompare}
       />
 
       <main>
@@ -238,7 +478,7 @@ function App() {
       <CompareModal
         isOpen={isCompareModalOpen}
         onClose={() => setIsCompareModalOpen(false)}
-        laptops={compareLaptops}
+        products={compareProducts}
         onRemove={handleToggleCompare}
         onClear={handleClearCompare}
       />
@@ -256,7 +496,7 @@ function App() {
         isOpen={isAlertManagerOpen}
         onClose={() => setIsAlertManagerOpen(false)}
         alerts={priceAlerts}
-        laptops={laptops}
+        products={allProducts}
         onToggleAlert={handleToggleAlert}
         onDeleteAlert={handleDeleteAlert}
       />

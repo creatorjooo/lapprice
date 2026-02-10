@@ -28,7 +28,7 @@ const SEARCH_QUERIES = {
     { query: '비즈니스 노트북', category: 'business', display: 20 },
     { query: '영상편집 노트북', category: 'creator', display: 20 },
     { query: '가성비 노트북', category: 'budget', display: 20 },
-    { query: '맥북', category: 'ultrabook', display: 15 },
+    { query: '맥북', category: 'apple', display: 15 },
     { query: '노트북 신제품 2025', category: 'budget', display: 15 },
     { query: '노트북 신제품 2026', category: 'budget', display: 15 },
   ],
@@ -43,8 +43,10 @@ const SEARCH_QUERIES = {
   desktop: [
     { query: '게이밍 데스크탑 PC', category: 'gaming', display: 25 },
     { query: '미니PC', category: 'minipc', display: 20 },
-    { query: '맥미니 M4', category: 'minipc', display: 10 },
-    { query: 'iMac', category: 'allinone', display: 10 },
+    { query: '맥미니 M4', category: 'mac', display: 15 },
+    { query: 'iMac', category: 'mac', display: 12 },
+    { query: '맥 스튜디오', category: 'mac', display: 10 },
+    { query: '올인원 PC', category: 'allinone', display: 15 },
     { query: '사무용 데스크탑', category: 'office', display: 15 },
     { query: '조립 PC 완제품', category: 'gaming', display: 15 },
   ],
@@ -84,7 +86,22 @@ function loadCatalog(productType) {
   const filePath = path.join(CATALOG_DIR, `${productType}.json`);
   try {
     if (fs.existsSync(filePath)) {
-      return JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+      const catalog = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+      if (Array.isArray(catalog.products)) {
+        let touched = false;
+        for (const product of catalog.products) {
+          const before = Number(product?.prices?.current) || 0;
+          syncPriceFromStores(product);
+          if ((Number(product?.prices?.current) || 0) !== before) {
+            touched = true;
+          }
+        }
+        // 과거 데이터 정합성 자동 보정
+        if (touched) {
+          fs.writeFileSync(filePath, JSON.stringify(catalog, null, 2), 'utf-8');
+        }
+      }
+      return catalog;
     }
   } catch (err) {
     console.error(`[ProductSync] 카탈로그 로드 오류 (${productType}):`, err.message);
@@ -146,6 +163,19 @@ function getPriceHistory(productId) {
     }
   } catch { /* ignore */ }
   return [];
+}
+
+/**
+ * 실사용 가능한 상품 이미지 URL인지 검증
+ */
+function isUsableProductImage(url) {
+  if (!url || typeof url !== 'string') return false;
+  const trimmed = url.trim();
+  if (!trimmed.startsWith('http')) return false;
+  const lower = trimmed.toLowerCase();
+  if (lower.includes('placehold.co')) return false;
+  if (lower.includes('placeholder')) return false;
+  return true;
 }
 
 /**
@@ -224,6 +254,8 @@ function normalizeNaverProduct(item, productType, category) {
     ? { percent: Math.round(((originalPrice - price) / originalPrice) * 100), amount: originalPrice - price }
     : { percent: 0, amount: 0 };
 
+  const normalizedImage = isUsableProductImage(item.image) ? item.image : '';
+
   return {
     id,
     productType,
@@ -246,7 +278,7 @@ function normalizeNaverProduct(item, productType, category) {
         price,
         shipping: 0,
         deliveryDays: '2~3일',
-        updatedAt: getTimeAgo(),
+        updatedAt: getStoreUpdatedAt(),
         url: item.link || '',
         isLowest: true,
       },
@@ -257,7 +289,7 @@ function normalizeNaverProduct(item, productType, category) {
     isNew: false,
     isHot: discount.percent >= 15,
     releaseDate: new Date().toISOString().slice(0, 7),
-    images: [item.image || ''],
+    images: [normalizedImage],
     tags: extractTags(title, productType),
     editorScore: undefined,
     editorPick: undefined,
@@ -295,6 +327,8 @@ function mergeProducts(existingProducts, newProducts) {
       // 기존 상품: 가격 업데이트
       const oldPrice = existing.prices.current;
       const newPrice = newP.prices.current;
+      const incomingStoreName = newP.stores[0]?.store || '평균';
+      let changed = false;
 
       if (newPrice > 0 && newPrice !== oldPrice) {
         existing.prices.current = newPrice;
@@ -318,16 +352,13 @@ function mergeProducts(existingProducts, newProducts) {
         existing.isHot = existing.discount.percent >= 15 || existing.priceIndex >= 90;
 
         existing._lastUpdated = new Date().toISOString();
-        updatedCount++;
-
-        // 가격 히스토리 기록
-        recordPriceHistory(existing.id, newPrice, newP.stores[0]?.store || '평균');
+        changed = true;
       }
 
       // 이미지 자동 갱신: 기존 이미지가 없거나 로컬 경로(/로 시작)면 API 이미지로 교체
-      if (newP.images?.[0] && newP.images[0].startsWith('http')) {
+      if (isUsableProductImage(newP.images?.[0])) {
         const existingImg = existing.images?.[0] || '';
-        if (!existingImg || !existingImg.startsWith('http') || existingImg.includes('placehold.co')) {
+        if (!isUsableProductImage(existingImg)) {
           existing.images = newP.images;
           console.log(`[ProductSync] 이미지 업데이트: ${existing.name} → ${newP.images[0].substring(0, 60)}...`);
         }
@@ -335,8 +366,21 @@ function mergeProducts(existingProducts, newProducts) {
 
       // 스토어 정보 업데이트/추가
       mergeStores(existing, newP);
+      // 대표가를 스토어 최저가 기준으로 동기화
+      syncPriceFromStores(existing);
+
+      // 스토어 병합으로 최저가가 바뀔 수 있으므로 최종 current를 기준으로 히스토리 기록
+      if (existing.prices.current > 0 && existing.prices.current !== oldPrice) {
+        changed = true;
+        const lowestStore = findLowestStore(existing.stores);
+        recordPriceHistory(existing.id, existing.prices.current, lowestStore?.store || incomingStoreName);
+      }
+      if (changed) {
+        updatedCount++;
+      }
     } else {
       // 신제품 추가
+      syncPriceFromStores(newP);
       newP.isNew = true;
       productMap.set(newP.id, newP);
       addedCount++;
@@ -366,15 +410,58 @@ function mergeStores(existing, newProduct) {
 
   if (existingStore) {
     existingStore.price = newStore.price;
-    existingStore.updatedAt = getTimeAgo();
+    existingStore.updatedAt = getStoreUpdatedAt();
     existingStore.isLowest = false;
   } else {
+    if (!newStore.updatedAt) {
+      newStore.updatedAt = getStoreUpdatedAt();
+    }
     existing.stores.push(newStore);
   }
 
   // 최저가 스토어 재계산
-  const lowestStore = existing.stores.reduce((min, s) => s.price < min.price ? s : min, existing.stores[0]);
-  existing.stores.forEach(s => { s.isLowest = s === lowestStore; });
+  const lowestStore = findLowestStore(existing.stores);
+  existing.stores.forEach(s => { s.isLowest = !!lowestStore && s === lowestStore; });
+}
+
+function findLowestStore(stores) {
+  if (!Array.isArray(stores) || stores.length === 0) return null;
+  const candidates = stores.filter((s) => Number(s?.price) > 0);
+  if (candidates.length === 0) return null;
+  return candidates.reduce((min, s) => (s.price < min.price ? s : min), candidates[0]);
+}
+
+/**
+ * 제품 대표가(prices.current)를 스토어 최저가와 일치시킴
+ */
+function syncPriceFromStores(product) {
+  if (!product || !Array.isArray(product.stores) || product.stores.length === 0) return;
+  const lowestStore = findLowestStore(product.stores);
+  if (!lowestStore) return;
+
+  const current = lowestStore.price;
+  product.prices.current = current;
+  product.prices.lowest = product.prices.lowest > 0
+    ? Math.min(product.prices.lowest, current)
+    : current;
+  product.prices.average = product.prices.average > 0
+    ? product.prices.average
+    : current;
+
+  if (!product.prices.original || product.prices.original < current) {
+    product.prices.original = current;
+  }
+
+  const discountAmount = Math.max(0, product.prices.original - current);
+  const discountPercent = product.prices.original > 0
+    ? Math.round((discountAmount / product.prices.original) * 100)
+    : 0;
+
+  product.discount = {
+    percent: discountPercent,
+    amount: discountAmount,
+  };
+  product.priceIndex = calculatePriceIndex(current, product.prices.lowest, product.prices.average);
 }
 
 /**
@@ -520,11 +607,8 @@ function getStoreLogo(mallName) {
   return logos[mallName] || '🏪';
 }
 
-/**
- * 시간 표시
- */
-function getTimeAgo() {
-  return `${Math.floor(Math.random() * 30) + 1}분 전`;
+function getStoreUpdatedAt() {
+  return new Date().toISOString();
 }
 
 /**
@@ -707,7 +791,7 @@ async function healImages(productType) {
 
   const productsNeedingImages = products.filter(p => {
     const img = p.images?.[0] || '';
-    return !img || !img.startsWith('http') || img.includes('placehold.co');
+    return !isUsableProductImage(img);
   });
 
   if (productsNeedingImages.length === 0) {
@@ -722,11 +806,12 @@ async function healImages(productType) {
       const searchQuery = `${product.brand} ${product.name}`.trim();
       const items = await fetchFromNaver(searchQuery, 3);
       
-      if (items.length > 0 && items[0].image) {
-        product.images = [items[0].image];
+      const firstValidImage = items.find((x) => isUsableProductImage(x.image))?.image || '';
+      if (firstValidImage) {
+        product.images = [firstValidImage];
         product._lastUpdated = new Date().toISOString();
         updatedCount++;
-        console.log(`[HealImages] ✅ ${product.name} → ${items[0].image.substring(0, 60)}...`);
+        console.log(`[HealImages] ✅ ${product.name} → ${firstValidImage.substring(0, 60)}...`);
       }
 
       // API 부하 방지
@@ -762,11 +847,12 @@ async function healAllImages() {
  */
 async function searchProductImage(productName) {
   const items = await fetchFromNaver(productName, 3);
-  if (items.length > 0 && items[0].image) {
+  const firstValidImage = items.find((x) => isUsableProductImage(x.image));
+  if (firstValidImage) {
     return {
-      image: items[0].image,
+      image: firstValidImage.image,
       source: 'naver',
-      title: stripHtml(items[0].title),
+      title: stripHtml(firstValidImage.title),
     };
   }
   return null;

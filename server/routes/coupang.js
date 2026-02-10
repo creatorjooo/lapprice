@@ -1,23 +1,7 @@
 const express = require('express');
 const router = express.Router();
-const CryptoJS = require('crypto-js');
 const { getCachedResult, setCachedResult } = require('../utils/helpers');
-
-/**
- * HMAC-SHA256 서명 생성 (쿠팡 파트너스 API 공통)
- */
-function generateHmac(method, apiPath, query) {
-  const accessKey = process.env.COUPANG_ACCESS_KEY;
-  const secretKey = process.env.COUPANG_SECRET_KEY;
-  const datetime = new Date().toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
-
-  const message = query
-    ? `${datetime}${method}${apiPath}${query}`
-    : `${datetime}${method}${apiPath}`;
-  const signature = CryptoJS.HmacSHA256(message, secretKey).toString(CryptoJS.enc.Hex);
-
-  return `CEA algorithm=HmacSHA256, access-key=${accessKey}, signed-date=${datetime}, signature=${signature}`;
-}
+const { buildCoupangAuthorization } = require('../utils/coupangAuth');
 
 /**
  * 쿠팡 URL 배열을 어필리에이트 Deeplink로 변환
@@ -29,7 +13,8 @@ async function convertToDeeplinks(urls, subId) {
 
   try {
     const apiPath = '/v2/providers/affiliate_open_api/apis/openapi/v1/deeplink';
-    const authorization = generateHmac('POST', apiPath);
+    const authorization = buildCoupangAuthorization({ method: 'POST', apiPath });
+    if (!authorization) return urls;
 
     const coupangUrls = urls.map((url) => {
       if (subId && !url.includes('subId=')) {
@@ -88,7 +73,10 @@ router.get('/', async (req, res) => {
     const method = 'GET';
     const path = '/v2/providers/affiliate_open_api/apis/openapi/v1/products/search';
     const query = `keyword=${encodeURIComponent(keyword)}&limit=${limit}`;
-    const authorization = generateHmac(method, path, query);
+    const authorization = buildCoupangAuthorization({ method, apiPath: path, query });
+    if (!authorization) {
+      return res.json({ source: 'coupang', available: false, products: [], error: 'API 키 미설정' });
+    }
 
     const url = `https://api-gateway.coupang.com${path}?${query}`;
     const response = await fetch(url, {

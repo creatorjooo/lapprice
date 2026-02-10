@@ -8,6 +8,7 @@ import type { Laptop, Monitor, Desktop } from '@/types';
 export interface UnifiedLocalResult {
   id: string;
   productType: 'laptop' | 'monitor' | 'desktop';
+  category: string;
   brand: string;
   name: string;
   price: number;
@@ -42,10 +43,14 @@ export interface UseShoppingSearchReturn {
   externalResults: ShoppingResult[];
   isLoading: boolean;
   platformStatus: Record<string, PlatformStatus>;
-  search: (query: string) => void;
+  search: (query: string, scope?: SearchScope) => void;
   clearResults: () => void;
   query: string;
+  scope: SearchScope;
+  setScope: (scope: SearchScope) => void;
 }
+
+export type SearchScope = 'all' | 'laptop' | 'monitor' | 'desktop';
 
 const PLATFORM_NAMES: Record<string, string> = {
   naver: '네이버 쇼핑',
@@ -67,6 +72,7 @@ function laptopToUnified(l: Laptop): UnifiedLocalResult {
   return {
     id: l.id,
     productType: 'laptop',
+    category: l.category,
     brand: l.brand,
     name: l.name,
     price: l.prices.current,
@@ -74,15 +80,23 @@ function laptopToUnified(l: Laptop): UnifiedLocalResult {
     discountPercent: l.discount.percent,
     specSummary: `${l.specs.cpu} · ${l.specs.ram}GB · ${l.specs.storage}GB`,
     icon: '💻',
-    hash: 'laptop',
+    hash: `laptop-${l.category}`,
   };
 }
 
 // ─── 모니터 → 통합 결과 변환 ───
 function monitorToUnified(m: Monitor): UnifiedLocalResult {
+  const sectionByCategory: Record<string, string> = {
+    gaming: 'mon-gaming',
+    professional: 'mon-pro',
+    ultrawide: 'mon-ultrawide',
+    general: 'mon-general',
+  };
+
   return {
     id: m.id,
     productType: 'monitor',
+    category: m.category,
     brand: m.brand,
     name: m.name,
     price: m.prices.current,
@@ -90,15 +104,25 @@ function monitorToUnified(m: Monitor): UnifiedLocalResult {
     discountPercent: m.discount.percent,
     specSummary: `${m.specs.screenSize}" ${m.specs.resolutionLabel} ${m.specs.refreshRate}Hz ${m.specs.panelType}`,
     icon: '🖥️',
-    hash: 'monitor',
+    hash: `monitor-${sectionByCategory[m.category] || m.category}`,
   };
 }
 
 // ─── 데스크탑 → 통합 결과 변환 ───
 function desktopToUnified(d: Desktop): UnifiedLocalResult {
+  const sectionByCategory: Record<string, string> = {
+    gaming: 'desk-gaming',
+    mac: 'desk-mac',
+    minipc: 'desk-mini',
+    allinone: 'desk-allinone',
+    office: 'desk-office',
+    creator: 'desk-creator',
+  };
+
   return {
     id: d.id,
     productType: 'desktop',
+    category: d.category,
     brand: d.brand,
     name: d.name,
     price: d.prices.current,
@@ -106,12 +130,13 @@ function desktopToUnified(d: Desktop): UnifiedLocalResult {
     discountPercent: d.discount.percent,
     specSummary: `${d.specs.cpu} · ${d.specs.gpu} · ${d.specs.ram}GB`,
     icon: '🖥️',
-    hash: 'desktop',
+    hash: `desktop-${sectionByCategory[d.category] || d.category}`,
   };
 }
 
 export function useShoppingSearch(): UseShoppingSearchReturn {
   const [query, setQuery] = useState('');
+  const [scope, setScope] = useState<SearchScope>('all');
   const [localResults, setLocalResults] = useState<UnifiedLocalResult[]>([]);
   const [externalResults, setExternalResults] = useState<ShoppingResult[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -120,7 +145,7 @@ export function useShoppingSearch(): UseShoppingSearchReturn {
   const abortRef = useRef<AbortController | null>(null);
 
   // ─── 로컬 통합 검색 (노트북 + 모니터 + 데스크탑) ───
-  const searchLocal = useCallback((q: string): UnifiedLocalResult[] => {
+  const searchLocal = useCallback((q: string, currentScope: SearchScope): UnifiedLocalResult[] => {
     if (!q.trim()) return [];
     const lower = q.toLowerCase();
 
@@ -166,14 +191,23 @@ export function useShoppingSearch(): UseShoppingSearchReturn {
       )
       .map(desktopToUnified);
 
+    const scopedResults =
+      currentScope === 'laptop'
+        ? laptopResults
+        : currentScope === 'monitor'
+          ? monitorResults
+          : currentScope === 'desktop'
+            ? desktopResults
+            : [...laptopResults, ...monitorResults, ...desktopResults];
+
     // 할인율 높은 순으로 정렬
-    return [...laptopResults, ...monitorResults, ...desktopResults].sort(
+    return scopedResults.sort(
       (a, b) => b.discountPercent - a.discountPercent
     );
   }, []);
 
   // 외부 API 검색
-  const searchExternal = useCallback(async (q: string) => {
+  const searchExternal = useCallback(async (q: string, currentScope: SearchScope) => {
     if (abortRef.current) {
       abortRef.current.abort();
     }
@@ -187,8 +221,16 @@ export function useShoppingSearch(): UseShoppingSearchReturn {
     setIsLoading(true);
 
     try {
+      const searchParams = new URLSearchParams({
+        query: q,
+        limit: '50',
+      });
+      if (currentScope !== 'all') {
+        searchParams.set('type', currentScope);
+      }
+
       const response = await fetch(
-        `/api/search?query=${encodeURIComponent(q)}`,
+        `/api/search?${searchParams.toString()}`,
         { signal: abortRef.current.signal }
       );
 
@@ -221,11 +263,12 @@ export function useShoppingSearch(): UseShoppingSearchReturn {
 
   // 통합 검색 (디바운스 300ms)
   const search = useCallback(
-    (q: string) => {
+    (q: string, nextScope: SearchScope = scope) => {
       setQuery(q);
+      setScope(nextScope);
 
       // 로컬 검색은 즉시 실행
-      setLocalResults(searchLocal(q));
+      setLocalResults(searchLocal(q, nextScope));
 
       // 외부 검색은 디바운스
       if (debounceRef.current) {
@@ -241,10 +284,10 @@ export function useShoppingSearch(): UseShoppingSearchReturn {
 
       setIsLoading(true);
       debounceRef.current = setTimeout(() => {
-        searchExternal(q);
+        searchExternal(q, nextScope);
       }, 300);
     },
-    [searchLocal, searchExternal]
+    [scope, searchLocal, searchExternal]
   );
 
   const clearResults = useCallback(() => {
@@ -263,6 +306,8 @@ export function useShoppingSearch(): UseShoppingSearchReturn {
     search,
     clearResults,
     query,
+    scope,
+    setScope,
   };
 }
 

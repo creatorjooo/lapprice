@@ -1,10 +1,13 @@
 const express = require('express');
 const router = express.Router();
-const CryptoJS = require('crypto-js');
 const { getCachedResult, setCachedResult } = require('../utils/helpers');
+const { buildCoupangAuthorization } = require('../utils/coupangAuth');
 
 // Deeplink 전용 캐시 TTL (24시간 - 어필리에이트 링크는 자주 변하지 않음)
 const DEEPLINK_CACHE_TTL = parseInt(process.env.DEEPLINK_CACHE_TTL || '86400', 10);
+const DEEPLINK_FAIL_COOLDOWN_MS = parseInt(process.env.DEEPLINK_FAIL_COOLDOWN_MS || '900000', 10); // 15분
+let deeplinkDisabledUntil = 0;
+let lastDeeplinkAuthLogAt = 0;
 
 /**
  * 쿠팡 파트너스 Deeplink API
@@ -22,10 +25,19 @@ router.post('/deeplink', async (req, res) => {
   // 최대 50개 URL 제한 (API 제한 대응)
   const limitedUrls = urls.slice(0, 50);
 
-  const accessKey = process.env.COUPANG_ACCESS_KEY;
-  const secretKey = process.env.COUPANG_SECRET_KEY;
+  const now = Date.now();
+  if (now < deeplinkDisabledUntil) {
+    return res.json({
+      warning: '쿠팡 Deeplink 일시 중단(인증 실패 감지)',
+      links: limitedUrls.map((url) => ({
+        originalUrl: url,
+        affiliateUrl: url,
+        shortenUrl: url,
+      })),
+    });
+  }
 
-  if (!accessKey || !secretKey) {
+  if (!process.env.COUPANG_ACCESS_KEY || !process.env.COUPANG_SECRET_KEY) {
     return res.json({
       error: '쿠팡 파트너스 API 키 미설정',
       links: limitedUrls.map((url) => ({
@@ -37,19 +49,23 @@ router.post('/deeplink', async (req, res) => {
   }
 
   // 캐시 확인 (URL 배열을 정렬하여 일관된 캐시 키 생성)
-  const cacheKey = `deeplink:${limitedUrls.sort().join('|')}:${subId || ''}`;
+  const cacheKey = `deeplink:${[...limitedUrls].sort().join('|')}:${subId || ''}`;
   const cached = getCachedResult(cacheKey);
   if (cached) return res.json(cached);
 
   try {
-    const method = 'POST';
     const apiPath = '/v2/providers/affiliate_open_api/apis/openapi/v1/deeplink';
-    const datetime = new Date().toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
-
-    // HMAC-SHA256 서명 생성
-    const message = `${datetime}${method}${apiPath}`;
-    const signature = CryptoJS.HmacSHA256(message, secretKey).toString(CryptoJS.enc.Hex);
-    const authorization = `CEA algorithm=HmacSHA256, access-key=${accessKey}, signed-date=${datetime}, signature=${signature}`;
+    const authorization = buildCoupangAuthorization({ method: 'POST', apiPath });
+    if (!authorization) {
+      return res.json({
+        error: '쿠팡 파트너스 API 키 미설정',
+        links: limitedUrls.map((url) => ({
+          originalUrl: url,
+          affiliateUrl: url,
+          shortenUrl: url,
+        })),
+      });
+    }
 
     // subId가 있으면 URL에 추가
     const coupangUrls = limitedUrls.map((url) => {
@@ -71,7 +87,8 @@ router.post('/deeplink', async (req, res) => {
     });
 
     if (!response.ok) {
-      throw new Error(`쿠팡 Deeplink API 오류: ${response.status}`);
+      const body = await response.text().catch(() => '');
+      throw new Error(`쿠팡 Deeplink API 오류: ${response.status}${body ? ` - ${body.slice(0, 120)}` : ''}`);
     }
 
     const data = await response.json();
@@ -90,10 +107,19 @@ router.post('/deeplink', async (req, res) => {
     setCachedResult(cacheKey, result, DEEPLINK_CACHE_TTL);
     res.json(result);
   } catch (err) {
-    console.error('[Affiliate] Deeplink API 오류:', err.message);
+    const msg = (err && err.message) ? err.message : 'unknown error';
+    if (msg.includes('401')) {
+      deeplinkDisabledUntil = Date.now() + DEEPLINK_FAIL_COOLDOWN_MS;
+      if (Date.now() - lastDeeplinkAuthLogAt > 60000) {
+        console.error('[Affiliate] Deeplink API 401 감지: 호출을 일시 중단합니다.', `cooldownMs=${DEEPLINK_FAIL_COOLDOWN_MS}`);
+        lastDeeplinkAuthLogAt = Date.now();
+      }
+    } else {
+      console.error('[Affiliate] Deeplink API 오류:', msg);
+    }
     // 실패 시 원본 URL 반환 (서비스 중단 방지)
     res.json({
-      error: err.message,
+      error: msg,
       links: limitedUrls.map((url) => ({
         originalUrl: url,
         affiliateUrl: url,
@@ -114,6 +140,15 @@ router.get('/convert', async (req, res) => {
     return res.status(400).json({ error: 'URL이 필요합니다.' });
   }
 
+  if (Date.now() < deeplinkDisabledUntil) {
+    return res.json({
+      originalUrl: url,
+      affiliateUrl: url,
+      shortenUrl: url,
+      warning: '쿠팡 Deeplink 일시 중단(인증 실패 감지)',
+    });
+  }
+
   // 쿠팡 URL이 아닌 경우 그대로 반환
   if (!url.includes('coupang.com')) {
     return res.json({ originalUrl: url, affiliateUrl: url, shortenUrl: url });
@@ -123,21 +158,16 @@ router.get('/convert', async (req, res) => {
   const cached = getCachedResult(cacheKey);
   if (cached) return res.json(cached);
 
-  const accessKey = process.env.COUPANG_ACCESS_KEY;
-  const secretKey = process.env.COUPANG_SECRET_KEY;
-
-  if (!accessKey || !secretKey) {
+  if (!process.env.COUPANG_ACCESS_KEY || !process.env.COUPANG_SECRET_KEY) {
     return res.json({ originalUrl: url, affiliateUrl: url, shortenUrl: url });
   }
 
   try {
-    const method = 'POST';
     const apiPath = '/v2/providers/affiliate_open_api/apis/openapi/v1/deeplink';
-    const datetime = new Date().toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
-
-    const message = `${datetime}${method}${apiPath}`;
-    const signature = CryptoJS.HmacSHA256(message, secretKey).toString(CryptoJS.enc.Hex);
-    const authorization = `CEA algorithm=HmacSHA256, access-key=${accessKey}, signed-date=${datetime}, signature=${signature}`;
+    const authorization = buildCoupangAuthorization({ method: 'POST', apiPath });
+    if (!authorization) {
+      return res.json({ originalUrl: url, affiliateUrl: url, shortenUrl: url });
+    }
 
     const targetUrl = subId && !url.includes('subId=')
       ? `${url}${url.includes('?') ? '&' : '?'}subId=${encodeURIComponent(subId)}`
@@ -153,7 +183,10 @@ router.get('/convert', async (req, res) => {
       body: JSON.stringify({ coupangUrls: [targetUrl] }),
     });
 
-    if (!response.ok) throw new Error(`API 오류: ${response.status}`);
+    if (!response.ok) {
+      const body = await response.text().catch(() => '');
+      throw new Error(`API 오류: ${response.status}${body ? ` - ${body.slice(0, 120)}` : ''}`);
+    }
 
     const data = await response.json();
     const deeplink = data?.data?.[0];
@@ -167,7 +200,15 @@ router.get('/convert', async (req, res) => {
     setCachedResult(cacheKey, result, DEEPLINK_CACHE_TTL);
     res.json(result);
   } catch (err) {
-    res.json({ originalUrl: url, affiliateUrl: url, shortenUrl: url, error: err.message });
+    const msg = (err && err.message) ? err.message : 'unknown error';
+    if (msg.includes('401')) {
+      deeplinkDisabledUntil = Date.now() + DEEPLINK_FAIL_COOLDOWN_MS;
+      if (Date.now() - lastDeeplinkAuthLogAt > 60000) {
+        console.error('[Affiliate] Deeplink API 401 감지: 호출을 일시 중단합니다.', `cooldownMs=${DEEPLINK_FAIL_COOLDOWN_MS}`);
+        lastDeeplinkAuthLogAt = Date.now();
+      }
+    }
+    res.json({ originalUrl: url, affiliateUrl: url, shortenUrl: url, error: msg });
   }
 });
 

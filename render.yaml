@@ -42,4 +42,17 @@ services:
       - key: AUTO_SYNC_ENABLED
         value: "true"
       - key: SYNC_INTERVAL_HOURS
-        value: "6"
+        value: "24"
+      # 가격 검증 파이프라인
+      - key: VERIFIED_ONLY_MODE
+        value: "true"
+      - key: CLICK_TIME_VERIFY
+        value: "true"
+      - key: VERIFICATION_STALE_MINUTES
+        value: "360"
+      - key: VERIFICATION_TIMEOUT_MS
+        value: "6500"
+      - key: NAVER_VERIFY_MIN_INTERVAL_MS
+        value: "120"
+      - key: COUPANG_VERIFY_MIN_INTERVAL_MS
+        value: "120"

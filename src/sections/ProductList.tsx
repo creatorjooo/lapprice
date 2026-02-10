@@ -161,7 +161,9 @@ export default function ProductList({
             </motion.div>
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-3 lg:gap-4">
-              {filteredLaptops.map((laptop, index) => (
+              {filteredLaptops.map((laptop, index) => {
+                const compareKey = `laptop:${laptop.id}`;
+                return (
                 <motion.div
                   key={laptop.id}
                   initial={{ opacity: 0, y: 20 }}
@@ -175,13 +177,14 @@ export default function ProductList({
                   <ProductCard
                     laptop={laptop}
                     isWishlisted={wishlist.includes(laptop.id)}
-                    isCompared={compareList.includes(laptop.id)}
+                    isCompared={compareList.includes(compareKey)}
                     onToggleWishlist={onToggleWishlist}
-                    onToggleCompare={onToggleCompare}
+                    onToggleCompare={() => onToggleCompare(compareKey)}
                     onSetPriceAlert={onSetPriceAlert}
                   />
                 </motion.div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>

@@ -8,13 +8,14 @@ const { fetchWithUA, parsePrice, getCachedResult, setCachedResult } = require('.
  * GET /api/ssg?query=노트북
  */
 router.get('/', async (req, res) => {
-  const { query } = req.query;
+  const { query, limit = '20' } = req.query;
 
   if (!query) {
     return res.status(400).json({ source: 'ssg', available: false, products: [], error: '검색어 필요' });
   }
 
-  const cacheKey = `ssg:${query}`;
+  const parsedLimit = Math.max(5, Math.min(100, parseInt(limit, 10) || 20));
+  const cacheKey = `ssg:${query}:${parsedLimit}`;
   const cached = getCachedResult(cacheKey);
   if (cached) return res.json(cached);
 
@@ -38,7 +39,7 @@ router.get('/', async (req, res) => {
 
     // SSG 검색 결과 HTML 파싱
     $('li.cunit_t232, li.cunit_t211, .csrch_unit li, [data-unittype]').each((i, el) => {
-      if (i >= 20) return false;
+      if (i >= parsedLimit) return false;
       const $el = $(el);
       const title = $el.find('.cunit_info .title a, .csrch_name a, .cunit_md .title').text().trim();
       const priceText = $el.find('.cunit_price .ssg_price, .opt_price .ssg_price, em.ssg_price').text().trim();

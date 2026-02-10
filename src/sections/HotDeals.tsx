@@ -4,6 +4,7 @@ import { Zap, ExternalLink, TrendingDown } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import type { Laptop } from '@/types';
 import { isAffiliatePlatform, trackAffiliateClick, getPlatformKey } from '@/utils/tracking';
+import { toImageSrc } from '@/utils/image';
 
 interface HotDealsProps {
   laptops: Laptop[];
@@ -82,7 +83,7 @@ export default function HotDeals({ laptops }: HotDealsProps) {
                 <div className="flex items-center gap-4 mb-4">
                   <div className="w-16 h-16 bg-slate-700/50 rounded-xl flex items-center justify-center text-3xl shrink-0 overflow-hidden">
                     {laptop.images?.[0]?.startsWith('http') ? (
-                      <img src={laptop.images[0]} alt={laptop.name} className="w-full h-full object-contain" loading="lazy" />
+                      <img src={toImageSrc(laptop.images[0])} alt={laptop.name} className="w-full h-full object-contain" loading="lazy" decoding="async" referrerPolicy="no-referrer" />
                     ) : '💻'}
                   </div>
                   <div className="min-w-0">

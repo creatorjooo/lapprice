@@ -1,7 +1,8 @@
-import { useRef } from 'react';
+import { useMemo, useRef } from 'react';
 import { motion, useInView } from 'framer-motion';
 import { ChevronRight, ArrowRight } from 'lucide-react';
 import type { Laptop } from '@/types';
+import { toImageSrc } from '@/utils/image';
 
 interface ProductShowcaseProps {
   id: string;
@@ -32,6 +33,27 @@ export default function ProductShowcase({
 }: ProductShowcaseProps) {
   const ref = useRef(null);
   const isInView = useInView(ref, { once: true, margin: '-100px' });
+  const isBudgetFocused = title.includes('가성비') || subtitle.includes('알뜰');
+  const isPortableFocused = title.includes('울트라북') || subtitle.includes('가볍');
+
+  const showcaseLaptops = useMemo(() => {
+    const scored = laptops.map((laptop) => {
+      const valueScore = laptop.priceIndex + laptop.discount.percent * 2;
+      const portabilityScore = Math.max(0, 120 - laptop.specs.weight * 45);
+      const performanceScore = laptop.editorScore || 70;
+      const weightedScore = isBudgetFocused
+        ? valueScore * 0.6 + portabilityScore * 0.2 + performanceScore * 0.2
+        : isPortableFocused
+          ? portabilityScore * 0.55 + valueScore * 0.3 + performanceScore * 0.15
+          : performanceScore * 0.45 + valueScore * 0.35 + portabilityScore * 0.2;
+
+      return { laptop, weightedScore: Math.round(weightedScore) };
+    });
+
+    return scored
+      .sort((a, b) => b.weightedScore - a.weightedScore)
+      .slice(0, 4);
+  }, [isBudgetFocused, isPortableFocused, laptops]);
 
   const bgClasses = {
     dark: 'bg-slate-900',
@@ -103,7 +125,7 @@ export default function ProductShowcase({
             className="relative"
           >
             <div className="grid grid-cols-2 gap-4">
-              {laptops.slice(0, 4).map((laptop, index) => (
+              {showcaseLaptops.map(({ laptop, weightedScore }, index) => (
                 <motion.div
                   key={laptop.id}
                   initial={{ opacity: 0, y: 20 }}
@@ -116,9 +138,12 @@ export default function ProductShowcase({
                   }`}
                   onClick={ctaAction}
                 >
+                  <div className="absolute top-2 left-2 text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/90 text-white font-semibold">
+                    추천 {weightedScore}점
+                  </div>
                   <div className="aspect-square flex items-center justify-center mb-4 overflow-hidden rounded-xl">
                     {laptop.images?.[0]?.startsWith('http') ? (
-                      <img src={laptop.images[0]} alt={laptop.name} className="w-full h-full object-contain group-hover:scale-110 transition-transform" loading="lazy" />
+                      <img src={toImageSrc(laptop.images[0])} alt={laptop.name} className="w-full h-full object-contain group-hover:scale-110 transition-transform" loading="lazy" decoding="async" referrerPolicy="no-referrer" />
                     ) : (
                       <span className="text-4xl sm:text-5xl group-hover:scale-110 transition-transform">💻</span>
                     )}

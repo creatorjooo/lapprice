@@ -5,6 +5,14 @@ require('dotenv').config();
 
 const { getCachedResult, setCachedResult, withTimeout } = require('./utils/helpers');
 const { syncAll, ensureDirectories, healAllImages } = require('./services/productSync');
+const { verifyAllOffers, ensureVerificationStorage } = require('./services/offerVerification');
+let ensureTrackedStorage = () => {};
+let refreshAllTrackedProducts = async () => ({ checked: 0, updated: 0, changed: 0 });
+try {
+  ({ ensureTrackedStorage, refreshAllTrackedProducts } = require('./services/trackedProducts'));
+} catch {
+  // tracked-products 모듈이 없는 배포에서도 서버는 계속 동작
+}
 
 const app = express();
 app.use(cors());
@@ -24,6 +32,14 @@ app.use('/api/track', require('./routes/track'));
 // ─── 관리자 & 뉴스레터 라우트 ───
 app.use('/api/admin', require('./routes/admin'));
 app.use('/api/newsletter', require('./routes/newsletter'));
+app.use('/api/offers', require('./routes/offers'));
+try {
+  app.use('/api/tracked-products', require('./routes/trackedProducts'));
+} catch {
+  // tracked-products 라우트가 없는 경우 스킵
+}
+app.use('/api/image-proxy', require('./routes/imageProxy'));
+app.use('/r', require('./routes/redirect'));
 
 // ─── 개별 플랫폼 라우트 ───
 app.use('/api/naver', require('./routes/naver'));
@@ -39,7 +55,7 @@ app.use('/api/interpark', require('./routes/interpark'));
 
 // ─── 통합 검색 엔드포인트: 10개 플랫폼 동시 호출 ───
 app.get('/api/search', async (req, res) => {
-  const { query, type } = req.query;
+  const { query, type, limit } = req.query;
   if (!query) {
     return res.status(400).json({ error: '검색어(query)가 필요합니다.' });
   }
@@ -50,7 +66,8 @@ app.get('/api/search', async (req, res) => {
   else if (type === 'desktop') searchQuery = `데스크탑 ${query}`;
   else if (type === 'laptop') searchQuery = `노트북 ${query}`;
 
-  const cacheKey = `unified:${type || 'all'}:${query}`;
+  const parsedLimit = Math.max(5, Math.min(100, parseInt(limit || '20', 10) || 20));
+  const cacheKey = `unified:${type || 'all'}:${query}:${parsedLimit}`;
   const cached = getCachedResult(cacheKey);
   if (cached) {
     return res.json(cached);
@@ -58,16 +75,16 @@ app.get('/api/search', async (req, res) => {
 
   const q = encodeURIComponent(searchQuery);
   const platformFetchers = [
-    { source: 'naver', fn: () => fetchPlatform(`${API_BASE_URL}/api/naver?query=${q}&display=20`) },
-    { source: 'coupang', fn: () => fetchPlatform(`${API_BASE_URL}/api/coupang?keyword=${q}&limit=20`) },
-    { source: '11st', fn: () => fetchPlatform(`${API_BASE_URL}/api/11st?keyword=${q}&pageSize=20`) },
-    { source: 'gmarket', fn: () => fetchPlatform(`${API_BASE_URL}/api/gmarket?keyword=${q}`) },
-    { source: 'auction', fn: () => fetchPlatform(`${API_BASE_URL}/api/auction?keyword=${q}`) },
-    { source: 'danawa', fn: () => fetchPlatform(`${API_BASE_URL}/api/danawa?query=${q}`) },
-    { source: 'ennuri', fn: () => fetchPlatform(`${API_BASE_URL}/api/ennuri?keyword=${q}`) },
-    { source: 'ssg', fn: () => fetchPlatform(`${API_BASE_URL}/api/ssg?query=${q}`) },
-    { source: 'lotteon', fn: () => fetchPlatform(`${API_BASE_URL}/api/lotteon?q=${q}`) },
-    { source: 'interpark', fn: () => fetchPlatform(`${API_BASE_URL}/api/interpark?q=${q}`) },
+    { source: 'naver', fn: () => fetchPlatform(`${API_BASE_URL}/api/naver?query=${q}&display=${parsedLimit}`) },
+    { source: 'coupang', fn: () => fetchPlatform(`${API_BASE_URL}/api/coupang?keyword=${q}&limit=${parsedLimit}`) },
+    { source: '11st', fn: () => fetchPlatform(`${API_BASE_URL}/api/11st?keyword=${q}&pageSize=${parsedLimit}`) },
+    { source: 'gmarket', fn: () => fetchPlatform(`${API_BASE_URL}/api/gmarket?keyword=${q}&limit=${parsedLimit}`) },
+    { source: 'auction', fn: () => fetchPlatform(`${API_BASE_URL}/api/auction?keyword=${q}&limit=${parsedLimit}`) },
+    { source: 'danawa', fn: () => fetchPlatform(`${API_BASE_URL}/api/danawa?query=${q}&limit=${parsedLimit}`) },
+    { source: 'ennuri', fn: () => fetchPlatform(`${API_BASE_URL}/api/ennuri?keyword=${q}&limit=${parsedLimit}`) },
+    { source: 'ssg', fn: () => fetchPlatform(`${API_BASE_URL}/api/ssg?query=${q}&limit=${parsedLimit}`) },
+    { source: 'lotteon', fn: () => fetchPlatform(`${API_BASE_URL}/api/lotteon?q=${q}&limit=${parsedLimit}`) },
+    { source: 'interpark', fn: () => fetchPlatform(`${API_BASE_URL}/api/interpark?q=${q}&limit=${parsedLimit}`) },
   ];
 
   const results = await Promise.allSettled(
@@ -132,10 +149,12 @@ app.listen(PORT, () => {
   console.log(`📦 상품 카탈로그 API: /api/products?type=laptop|monitor|desktop`);
 
   // ─── 자동 동기화 스케줄러 ───
-  const SYNC_INTERVAL_HOURS = parseInt(process.env.SYNC_INTERVAL_HOURS || '6', 10);
+  const SYNC_INTERVAL_HOURS = parseInt(process.env.SYNC_INTERVAL_HOURS || '24', 10);
   const SYNC_ENABLED = process.env.AUTO_SYNC_ENABLED !== 'false';
 
   ensureDirectories();
+  ensureTrackedStorage();
+  ensureVerificationStorage();
 
   if (SYNC_ENABLED) {
     // 서버 시작 30초 후 첫 동기화 (API가 완전히 준비된 후)
@@ -150,6 +169,15 @@ app.listen(PORT, () => {
         healResults.forEach(r => {
           if (r.updated > 0) console.log(`  🖼️ ${r.productType}: ${r.updated}개 이미지 보충`);
         });
+        console.log('✅ [가격 검증] 시작...');
+        const verificationSummaries = await verifyAllOffers({ trigger: 'batch', force: true });
+        verificationSummaries.forEach((summary) => {
+          console.log(`  🔎 ${summary.productType}: 검증 ${summary.attempted}건, 성공 ${summary.verified}, 실패 ${summary.failed}`);
+        });
+        const trackedResults = await refreshAllTrackedProducts(API_BASE_URL);
+        if (trackedResults.checked > 0) {
+          console.log(`📈 [추적 상품] 점검 ${trackedResults.checked}개 · 갱신 ${trackedResults.updated}개 · 변동 ${trackedResults.changed}개`);
+        }
       } catch (err) {
         console.error('❌ [초기 동기화] 실패:', err.message);
       }
@@ -161,6 +189,8 @@ app.listen(PORT, () => {
         await syncAll();
         // 동기화 후 이미지 자동 보충
         await healAllImages();
+        await verifyAllOffers({ trigger: 'batch', force: true });
+        await refreshAllTrackedProducts(API_BASE_URL);
       } catch (err) {
         console.error('❌ [주기 동기화] 실패:', err.message);
       }

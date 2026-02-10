@@ -10,13 +10,13 @@ import {
   SheetTitle,
   SheetDescription,
 } from '@/components/ui/sheet';
-import type { Laptop, PriceAlert } from '@/types';
+import type { PriceAlert, Product } from '@/types';
 
 interface PriceAlertManagerProps {
   isOpen: boolean;
   onClose: () => void;
   alerts: PriceAlert[];
-  laptops: Laptop[];
+  products: Product[];
   onToggleAlert: (alertId: string) => void;
   onDeleteAlert: (alertId: string) => void;
 }
@@ -25,11 +25,11 @@ export default function PriceAlertManager({
   isOpen,
   onClose,
   alerts,
-  laptops,
+  products,
   onToggleAlert,
   onDeleteAlert,
 }: PriceAlertManagerProps) {
-  const getLaptop = (laptopId: string) => laptops.find((l) => l.id === laptopId);
+  const getProduct = (productId: string) => products.find((p) => p.id === productId);
 
   const getProgress = (currentPrice: number, originalPrice: number, targetPrice: number) => {
     if (currentPrice <= targetPrice) return 100;
@@ -71,14 +71,14 @@ export default function PriceAlertManager({
             </div>
           ) : (
             alerts.map((alert) => {
-              const laptop = getLaptop(alert.laptopId);
-              if (!laptop) return null;
+              const product = getProduct(alert.laptopId);
+              if (!product) return null;
 
-              const isReached = laptop.prices.current <= alert.targetPrice;
+              const isReached = product.prices.current <= alert.targetPrice;
               const expired = isExpired(alert.createdAt);
               const progress = getProgress(
-                laptop.prices.current,
-                laptop.prices.original,
+                product.prices.current,
+                product.prices.original,
                 alert.targetPrice
               );
 
@@ -96,8 +96,8 @@ export default function PriceAlertManager({
                   {/* 헤더 */}
                   <div className="flex items-start justify-between mb-2">
                     <div className="flex-1 min-w-0">
-                      <p className="text-xs text-slate-500">{laptop.brand}</p>
-                      <p className="text-sm font-semibold truncate">{laptop.name}</p>
+                      <p className="text-xs text-slate-500">{product.brand}</p>
+                      <p className="text-sm font-semibold truncate">{product.name}</p>
                     </div>
                     <div className="flex items-center gap-2 ml-2">
                       {isReached && (
@@ -118,7 +118,7 @@ export default function PriceAlertManager({
                   {/* 가격 정보 */}
                   <div className="flex items-center justify-between text-xs mb-2">
                     <span className="text-slate-500">
-                      현재가: <span className="font-semibold text-slate-900 dark:text-white">{laptop.prices.current.toLocaleString()}원</span>
+                      현재가: <span className="font-semibold text-slate-900 dark:text-white">{product.prices.current.toLocaleString()}원</span>
                     </span>
                     <span className="text-emerald-600 dark:text-emerald-400">
                       목표가: <span className="font-bold">{alert.targetPrice.toLocaleString()}원</span>

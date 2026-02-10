@@ -1,6 +1,12 @@
 const express = require('express');
 const router = express.Router();
-const { loadCatalog, getPriceHistory, syncAll, syncProductType, healAllImages, searchProductImage } = require('../services/productSync');
+const { getPriceHistory, syncAll, syncProductType, healAllImages, searchProductImage } = require('../services/productSync');
+const { prepareCatalogForResponse, verifyAllOffers, isVerifiedOnlyMode } = require('../services/offerVerification');
+
+function parseBoolean(value, fallback) {
+  if (value === undefined || value === null || value === '') return fallback;
+  return String(value).toLowerCase() !== 'false';
+}
 
 /**
  * GET /api/products
@@ -17,13 +23,25 @@ const { loadCatalog, getPriceHistory, syncAll, syncProductType, healAllImages, s
  *   offset: 건너뛸 개수 (선택, 기본값 0)
  */
 router.get('/', (req, res) => {
-  const { type, category, brand, minPrice, maxPrice, sort = 'discount', limit = '100', offset = '0', q } = req.query;
+  const {
+    type,
+    category,
+    brand,
+    minPrice,
+    maxPrice,
+    sort = 'discount',
+    limit = '100',
+    offset = '0',
+    q,
+    verifiedOnly,
+  } = req.query;
 
   if (!type || !['laptop', 'monitor', 'desktop'].includes(type)) {
     return res.status(400).json({ error: 'type 파라미터 필요 (laptop | monitor | desktop)' });
   }
 
-  const catalog = loadCatalog(type);
+  const verifiedOnlyMode = parseBoolean(verifiedOnly, isVerifiedOnlyMode());
+  const catalog = prepareCatalogForResponse(type, { verifiedOnly: verifiedOnlyMode });
   let products = catalog.products || [];
 
   // 검색어 필터
@@ -85,6 +103,7 @@ router.get('/', (req, res) => {
 
   res.json({
     type,
+    verifiedOnly: verifiedOnlyMode,
     total: products.length,
     offset: offsetNum,
     limit: limitNum,
@@ -114,7 +133,7 @@ router.get('/stats', (req, res) => {
   const stats = {};
 
   for (const type of types) {
-    const catalog = loadCatalog(type);
+    const catalog = prepareCatalogForResponse(type, { verifiedOnly: true });
     stats[type] = {
       total: (catalog.products || []).length,
       lastSync: catalog.lastSync,
@@ -170,7 +189,11 @@ router.post('/sync', async (req, res) => {
     } else {
       results = await syncAll();
     }
-    res.json({ success: true, results });
+
+    // 수동 동기화 직후 이미지 자동 보충까지 연계
+    const healResults = await healAllImages();
+    const verification = await verifyAllOffers({ trigger: 'batch', force: true });
+    res.json({ success: true, results, healResults, verification });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -186,7 +209,7 @@ router.get('/hot-deals', (req, res) => {
 
   const allProducts = [];
   for (const type of ['laptop', 'monitor', 'desktop']) {
-    const catalog = loadCatalog(type);
+    const catalog = prepareCatalogForResponse(type, { verifiedOnly: true });
     allProducts.push(...(catalog.products || []));
   }
 
@@ -210,9 +233,26 @@ router.get('/hot-deals', (req, res) => {
 router.post('/heal-images', async (req, res) => {
   const { password } = req.body;
   const adminPassword = process.env.ADMIN_PASSWORD || 'lapprice2026admin';
-  const token = req.headers.authorization?.replace('Bearer ', '');
+  const authHeader = req.headers.authorization;
 
-  if (password !== adminPassword && token !== adminPassword) {
+  // sync 엔드포인트와 동일한 인증 방식 사용
+  let authenticated = false;
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    const token = authHeader.split(' ')[1];
+    try {
+      const decoded = Buffer.from(token, 'base64').toString('utf-8');
+      const parsed = JSON.parse(decoded);
+      if (parsed.role === 'admin' && parsed.exp > Date.now()) {
+        authenticated = true;
+      }
+    } catch { /* invalid token */ }
+  }
+
+  if (!authenticated && password === adminPassword) {
+    authenticated = true;
+  }
+
+  if (!authenticated) {
     return res.status(401).json({ error: '인증 필요' });
   }
 

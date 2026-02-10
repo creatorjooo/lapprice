@@ -1,5 +1,6 @@
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { cn } from '@/lib/utils';
+import { isProxyCandidate, toImageProxySrc } from '@/utils/image';
 
 interface ProductImageProps {
   src?: string;
@@ -9,12 +10,26 @@ interface ProductImageProps {
 }
 
 export default function ProductImage({ src, alt, className, fallbackText }: ProductImageProps) {
+  const normalizedSrc = useMemo(() => String(src || '').trim(), [src]);
+  const canProxy = useMemo(() => isProxyCandidate(normalizedSrc), [normalizedSrc]);
+  const proxySrc = useMemo(() => (canProxy ? toImageProxySrc(normalizedSrc) : ''), [canProxy, normalizedSrc]);
+
+  const [imgSrc, setImgSrc] = useState(normalizedSrc);
+  const [usedProxy, setUsedProxy] = useState(false);
   const [hasError, setHasError] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
 
-  // 로컬 경로(/)로 시작하면서 http가 아닌 경우 → 바로 fallback
-  const isLocalPath = src && src.startsWith('/') && !src.startsWith('//');
-  const showFallback = hasError || !src || isLocalPath;
+  useEffect(() => {
+    setImgSrc(normalizedSrc);
+    setUsedProxy(false);
+    setHasError(false);
+    setIsLoading(true);
+  }, [normalizedSrc]);
+
+  // 로컬 경로/placeholder는 즉시 fallback
+  const isLocalPath = normalizedSrc.startsWith('/') && !normalizedSrc.startsWith('//');
+  const isPlaceholder = normalizedSrc.toLowerCase().includes('placehold.co') || normalizedSrc.toLowerCase().includes('placeholder');
+  const showFallback = hasError || !normalizedSrc || isLocalPath || isPlaceholder;
 
   if (showFallback) {
     return (
@@ -35,12 +50,23 @@ export default function ProductImage({ src, alt, className, fallbackText }: Prod
         </div>
       )}
       <img
-        src={src}
+        src={imgSrc}
         alt={alt}
         className={cn(className, isLoading && 'hidden')}
         loading="lazy"
+        decoding="async"
+        referrerPolicy="no-referrer"
         onLoad={() => setIsLoading(false)}
-        onError={() => { setHasError(true); setIsLoading(false); }}
+        onError={() => {
+          if (!usedProxy && canProxy && proxySrc && imgSrc !== proxySrc) {
+            setUsedProxy(true);
+            setIsLoading(true);
+            setImgSrc(proxySrc);
+            return;
+          }
+          setHasError(true);
+          setIsLoading(false);
+        }}
       />
     </>
   );

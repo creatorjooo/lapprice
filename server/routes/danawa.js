@@ -8,13 +8,14 @@ const { fetchWithUA, parsePrice, getCachedResult, setCachedResult } = require('.
  * GET /api/danawa?query=노트북
  */
 router.get('/', async (req, res) => {
-  const { query } = req.query;
+  const { query, limit = '20' } = req.query;
 
   if (!query) {
     return res.status(400).json({ source: 'danawa', available: false, products: [], error: '검색어 필요' });
   }
 
-  const cacheKey = `danawa:${query}`;
+  const parsedLimit = Math.max(5, Math.min(100, parseInt(limit, 10) || 20));
+  const cacheKey = `danawa:${query}:${parsedLimit}`;
   const cached = getCachedResult(cacheKey);
   if (cached) return res.json(cached);
 
@@ -36,7 +37,7 @@ router.get('/', async (req, res) => {
 
     // 다나와 검색 결과 파싱
     $('li.prod_item, .product_list li').each((i, el) => {
-      if (i >= 20) return false;
+      if (i >= parsedLimit) return false;
       const $el = $(el);
       const title = $el.find('p.prod_name a, .prod_name .text').text().trim();
       const priceText = $el.find('p.price_sect a strong, .price_sect strong').text().trim();

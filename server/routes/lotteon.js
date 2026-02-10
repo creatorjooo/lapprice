@@ -8,13 +8,14 @@ const { fetchWithUA, parsePrice, getCachedResult, setCachedResult } = require('.
  * GET /api/lotteon?q=노트북
  */
 router.get('/', async (req, res) => {
-  const { q } = req.query;
+  const { q, limit = '20' } = req.query;
 
   if (!q) {
     return res.status(400).json({ source: 'lotteon', available: false, products: [], error: '검색어 필요' });
   }
 
-  const cacheKey = `lotteon:${q}`;
+  const parsedLimit = Math.max(5, Math.min(100, parseInt(limit, 10) || 20));
+  const cacheKey = `lotteon:${q}:${parsedLimit}`;
   const cached = getCachedResult(cacheKey);
   if (cached) return res.json(cached);
 
@@ -37,7 +38,7 @@ router.get('/', async (req, res) => {
 
     // 롯데ON 검색 결과 HTML 파싱
     $('li.srchProductItem, .srchProductList li, [class*="product-item"], .search_list li').each((i, el) => {
-      if (i >= 20) return false;
+      if (i >= parsedLimit) return false;
       const $el = $(el);
       const title = $el.find('.srchProductInfo .name, .product-name, a.product_name, .prd_name').text().trim();
       const priceText = $el.find('.srchProductInfo .price, .product-price .final, .s_price, .prd_price').text().trim();

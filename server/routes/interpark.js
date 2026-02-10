@@ -8,13 +8,14 @@ const { fetchWithUA, parsePrice, getCachedResult, setCachedResult } = require('.
  * GET /api/interpark?q=노트북
  */
 router.get('/', async (req, res) => {
-  const { q } = req.query;
+  const { q, limit = '20' } = req.query;
 
   if (!q) {
     return res.status(400).json({ source: 'interpark', available: false, products: [], error: '검색어 필요' });
   }
 
-  const cacheKey = `interpark:${q}`;
+  const parsedLimit = Math.max(5, Math.min(100, parseInt(limit, 10) || 20));
+  const cacheKey = `interpark:${q}:${parsedLimit}`;
   const cached = getCachedResult(cacheKey);
   if (cached) return res.json(cached);
 
@@ -36,7 +37,7 @@ router.get('/', async (req, res) => {
 
     // 인터파크 검색 결과 HTML 파싱
     $('li.prod_item, .search_result li, [class*="product-card"], .prd_list li, .prod-list li').each((i, el) => {
-      if (i >= 20) return false;
+      if (i >= parsedLimit) return false;
       const $el = $(el);
       const title = $el.find('.prod_name a, .prd_name a, .name a, a.product_name').text().trim();
       const priceText = $el.find('.price .num, .prd_price, .prod_price strong, .price strong').text().trim();

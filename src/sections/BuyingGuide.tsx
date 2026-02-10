@@ -16,6 +16,26 @@ interface GuideCategory {
   filterCategory: string;
 }
 
+interface PersonaConfig {
+  categories: Laptop['category'][];
+  budgetLimit: number;
+  weights: {
+    budget: number;
+    value: number;
+    portability: number;
+    performance: number;
+  };
+}
+
+interface ScoredPick {
+  laptop: Laptop;
+  finalScore: number;
+  budgetScore: number;
+  valueScore: number;
+  portabilityScore: number;
+  performanceScore: number;
+}
+
 const guideCategories: GuideCategory[] = [
   {
     id: 'gaming',
@@ -47,26 +67,133 @@ const guideCategories: GuideCategory[] = [
   },
 ];
 
+const personaConfig: Record<string, PersonaConfig> = {
+  gaming: {
+    categories: ['gaming'],
+    budgetLimit: 2200000,
+    weights: { budget: 0.2, value: 0.25, portability: 0.1, performance: 0.45 },
+  },
+  office: {
+    categories: ['business', 'budget', 'ultrabook'],
+    budgetLimit: 1300000,
+    weights: { budget: 0.4, value: 0.3, portability: 0.2, performance: 0.1 },
+  },
+  creator: {
+    categories: ['creator', 'apple', 'gaming'],
+    budgetLimit: 3000000,
+    weights: { budget: 0.2, value: 0.2, portability: 0.1, performance: 0.5 },
+  },
+  portable: {
+    categories: ['ultrabook', 'apple', 'business'],
+    budgetLimit: 2200000,
+    weights: { budget: 0.15, value: 0.2, portability: 0.5, performance: 0.15 },
+  },
+};
+
+const clamp = (v: number, min: number, max: number) => Math.max(min, Math.min(max, v));
+
+function parseBatteryHours(battery: string): number {
+  const hourMatch = battery.match(/(\d+)\s*시간/);
+  if (hourMatch) return parseInt(hourMatch[1], 10);
+  const whMatch = battery.match(/(\d+)\s*Wh/i);
+  if (whMatch) {
+    // Wh 기반 대략 추정치
+    return Math.round(parseInt(whMatch[1], 10) / 5);
+  }
+  return 10;
+}
+
+function scorePerformance(laptop: Laptop): number {
+  const cpu = laptop.specs.cpu.toLowerCase();
+  const gpu = laptop.specs.gpu.toLowerCase();
+  const ramScore = clamp((laptop.specs.ram / 32) * 100, 20, 100);
+
+  const cpuScore =
+    cpu.includes('ultra 9') || cpu.includes('i9') || cpu.includes('m4 max') ? 100
+      : cpu.includes('ultra 7') || cpu.includes('i7') || cpu.includes('m4 pro') ? 85
+        : cpu.includes('ultra 5') || cpu.includes('i5') || cpu.includes('m4') || cpu.includes('ryzen 7') ? 72
+          : cpu.includes('ryzen 5') ? 62
+            : 50;
+
+  const gpuScore =
+    gpu.includes('rtx 4090') || gpu.includes('rtx 4080') ? 100
+      : gpu.includes('rtx 4070') ? 90
+        : gpu.includes('rtx 4060') ? 80
+          : gpu.includes('rtx') || gpu.includes('m4 max') ? 70
+            : gpu.includes('arc') || gpu.includes('iris') ? 52
+              : 45;
+
+  return Math.round(cpuScore * 0.4 + gpuScore * 0.35 + ramScore * 0.25);
+}
+
+function scorePortability(laptop: Laptop): number {
+  const weightScore = clamp((2.6 - laptop.specs.weight) / 1.8 * 100, 0, 100);
+  const batteryHours = parseBatteryHours(laptop.specs.battery);
+  const batteryScore = clamp((batteryHours - 6) / 14 * 100, 0, 100);
+  return Math.round(weightScore * 0.7 + batteryScore * 0.3);
+}
+
+function scoreBudget(price: number, budgetLimit: number): number {
+  if (price <= budgetLimit) {
+    return clamp(100 - (price / budgetLimit) * 25, 75, 100);
+  }
+  // 예산 초과 시 강한 패널티
+  const overRatio = (price - budgetLimit) / budgetLimit;
+  return clamp(45 - overRatio * 140, 0, 45);
+}
+
+function scoreValue(laptop: Laptop): number {
+  const discountScore = clamp(laptop.discount.percent * 3.5, 0, 100);
+  const priceIndexScore = clamp(laptop.priceIndex, 0, 100);
+  return Math.round(discountScore * 0.35 + priceIndexScore * 0.65);
+}
+
+function getBestPickForPersona(laptops: Laptop[], personaId: string): ScoredPick | null {
+  const config = personaConfig[personaId];
+  if (!config) return null;
+
+  const candidates = laptops.filter((l) => config.categories.includes(l.category));
+  if (candidates.length === 0) return null;
+
+  const scored = candidates.map((laptop) => {
+    const budgetScore = scoreBudget(laptop.prices.current, config.budgetLimit);
+    const valueScore = scoreValue(laptop);
+    const portabilityScore = scorePortability(laptop);
+    const performanceScore = scorePerformance(laptop);
+
+    // 예산을 크게 초과한 제품은 추가 패널티
+    const hardBudgetPenalty = laptop.prices.current > config.budgetLimit * 1.5 ? 20 : 0;
+
+    const finalScore = Math.round(
+      budgetScore * config.weights.budget +
+      valueScore * config.weights.value +
+      portabilityScore * config.weights.portability +
+      performanceScore * config.weights.performance -
+      hardBudgetPenalty
+    );
+
+    return {
+      laptop,
+      finalScore,
+      budgetScore,
+      valueScore,
+      portabilityScore,
+      performanceScore,
+    };
+  });
+
+  scored.sort((a, b) => b.finalScore - a.finalScore);
+  return scored[0];
+}
+
 export default function BuyingGuide({ laptops, onCategorySelect }: BuyingGuideProps) {
   const ref = useRef(null);
   const isInView = useInView(ref, { once: true, margin: '-100px' });
 
-  // 각 가이드 카테고리에 대해 에디터 픽 제품 자동 선정
+  // 각 페르소나별 추천 제품 자동 선정 (예산 패널티 포함)
   const picks = useMemo(() => {
-    const categoryMap: Record<string, string[]> = {
-      gaming: ['gaming'],
-      office: ['business', 'budget'],
-      creator: ['creator', 'gaming'],
-      portable: ['ultrabook'],
-    };
-
     return guideCategories.map((guide) => {
-      const categories = categoryMap[guide.id] || [];
-      const candidates = laptops.filter(
-        (l) => categories.includes(l.category) && l.editorScore
-      );
-      // 에디터 점수 최고인 제품 선택
-      const pick = candidates.sort((a, b) => (b.editorScore || 0) - (a.editorScore || 0))[0];
+      const pick = getBestPickForPersona(laptops, guide.id);
       return { guide, pick };
     });
   }, [laptops]);
@@ -116,16 +243,27 @@ export default function BuyingGuide({ laptops, onCategorySelect }: BuyingGuidePr
               {pick && (
                 <div className="bg-white group-hover:bg-slate-50 rounded-xl p-4 border border-slate-100 transition-colors">
                   <p className="text-[10px] text-blue-600 font-semibold uppercase tracking-wider mb-1">
-                    에디터 픽 #{1}
+                    추천 점수 {pick.finalScore}점
                   </p>
-                  <p className="font-bold text-slate-900 text-sm mb-1">{pick.brand} {pick.name}</p>
+                  <p className="font-bold text-slate-900 text-sm mb-1">{pick.laptop.brand} {pick.laptop.name}</p>
                   <p className="text-lg font-bold text-slate-900">
-                    {pick.prices.current.toLocaleString()}원
+                    {pick.laptop.prices.current.toLocaleString()}원
                   </p>
-                  {pick.editorComment && (
-                    <p className="text-xs text-slate-500 mt-2 italic line-clamp-2">
-                      &ldquo;{pick.editorComment}&rdquo;
+                  <p className="text-[11px] text-slate-500 mt-1">
+                    가성비 {pick.valueScore} · 휴대성 {pick.portabilityScore} · 예산적합 {pick.budgetScore}
+                  </p>
+                  {pick.laptop.prices.current > (personaConfig[guide.id]?.budgetLimit || 999999999) && (
+                    <p className="text-[11px] text-rose-600 mt-1">
+                      예산 초과 제품 (대안도 함께 확인 권장)
                     </p>
+                  )}
+                  {pick.laptop.editorComment && (
+                    <p className="text-xs text-slate-500 mt-2 italic line-clamp-2">
+                      &ldquo;{pick.laptop.editorComment}&rdquo;
+                    </p>
+                  )}
+                  {pick.laptop.bestFor && (
+                    <p className="text-[11px] text-slate-600 mt-1">{pick.laptop.bestFor}</p>
                   )}
                 </div>
               )}

@@ -3,6 +3,7 @@ import { motion, useInView } from 'framer-motion';
 import { ChevronLeft, ChevronRight, ArrowRight } from 'lucide-react';
 import type { Laptop } from '@/types';
 import { categories } from '@/data/laptops';
+import { toImageSrc } from '@/utils/image';
 
 interface StoreSectionProps {
   laptops: Laptop[];
@@ -125,7 +126,7 @@ export default function StoreSection({ laptops, onNavigate, onCategorySelect }: 
               >
                 <div className="aspect-[4/3] bg-slate-100 rounded-xl flex items-center justify-center mb-4 overflow-hidden">
                   {laptop.images?.[0]?.startsWith('http') ? (
-                    <img src={laptop.images[0]} alt={laptop.name} className="w-full h-full object-contain group-hover:scale-110 transition-transform" loading="lazy" />
+                    <img src={toImageSrc(laptop.images[0])} alt={laptop.name} className="w-full h-full object-contain group-hover:scale-110 transition-transform" loading="lazy" decoding="async" referrerPolicy="no-referrer" />
                   ) : (
                     <span className="text-5xl group-hover:scale-110 transition-transform">💻</span>
                   )}

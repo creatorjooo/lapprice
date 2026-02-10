@@ -4,13 +4,14 @@ import { laptops as staticLaptops } from '@/data/laptops';
 import { monitors as staticMonitors } from '@/data/monitors';
 import { desktops as staticDesktops } from '@/data/desktops';
 
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3001';
+const API_BASE = (import.meta.env.VITE_API_URL || '').replace(/\/$/, '');
 const CACHE_KEY_PREFIX = 'lapprice_products_';
 const CACHE_TTL = 5 * 60 * 1000; // 5분 캐시
 
 interface ProductsResponse {
   type: string;
   total: number;
+  verifiedOnly?: boolean;
   lastSync: string | null;
   syncCount: number;
   stats: {
@@ -42,6 +43,7 @@ export function useProducts<T extends Product = Product>(
   options?: {
     category?: string;
     enabled?: boolean;
+    verifiedOnly?: boolean;
   }
 ): UseProductsResult<T> {
   const [products, setProducts] = useState<T[]>([]);
@@ -52,7 +54,7 @@ export function useProducts<T extends Product = Product>(
   const [error, setError] = useState<string | null>(null);
   const [refreshVersion, setRefreshVersion] = useState(0);
 
-  const { category, enabled = true } = options || {};
+  const { category, enabled = true, verifiedOnly = true } = options || {};
 
   // 정적 데이터 fallback
   const getStaticData = useCallback((): T[] => {
@@ -67,7 +69,7 @@ export function useProducts<T extends Product = Product>(
   // 로컬 캐시 확인
   const getCachedProducts = useCallback((): ProductsResponse | null => {
     try {
-      const cacheKey = `${CACHE_KEY_PREFIX}${productType}_${category || 'all'}`;
+      const cacheKey = `${CACHE_KEY_PREFIX}${productType}_${category || 'all'}_${verifiedOnly ? 'verified' : 'all'}`;
       const cached = sessionStorage.getItem(cacheKey);
       if (!cached) return null;
       
@@ -80,15 +82,15 @@ export function useProducts<T extends Product = Product>(
     } catch {
       return null;
     }
-  }, [productType, category]);
+  }, [productType, category, verifiedOnly]);
 
   // 캐시 저장
   const setCachedProducts = useCallback((data: ProductsResponse) => {
     try {
-      const cacheKey = `${CACHE_KEY_PREFIX}${productType}_${category || 'all'}`;
+      const cacheKey = `${CACHE_KEY_PREFIX}${productType}_${category || 'all'}_${verifiedOnly ? 'verified' : 'all'}`;
       sessionStorage.setItem(cacheKey, JSON.stringify({ data, timestamp: Date.now() }));
     } catch { /* sessionStorage 꽉 찬 경우 무시 */ }
-  }, [productType, category]);
+  }, [productType, category, verifiedOnly]);
 
   // API에서 상품 로드
   useEffect(() => {
@@ -120,6 +122,7 @@ export function useProducts<T extends Product = Product>(
       try {
         const params = new URLSearchParams({ type: productType, limit: '200' });
         if (category) params.set('category', category);
+        params.set('verifiedOnly', String(verifiedOnly));
         
         const response = await fetch(`${API_BASE}/api/products?${params}`, {
           signal: controller.signal,
@@ -132,7 +135,7 @@ export function useProducts<T extends Product = Product>(
 
         const data: ProductsResponse = await response.json();
         
-        if (data.products && data.products.length > 0) {
+        if (Array.isArray(data.products)) {
           setProducts(data.products as T[]);
           setIsFromApi(true);
           setLastSync(data.lastSync);
@@ -142,7 +145,7 @@ export function useProducts<T extends Product = Product>(
           return;
         }
         
-        throw new Error('API 카탈로그 비어있음');
+        throw new Error('API 응답 형식 오류');
       } catch (err) {
         clearTimeout(timeout);
         if (cancelled) return;
@@ -162,16 +165,16 @@ export function useProducts<T extends Product = Product>(
     fetchProducts();
 
     return () => { cancelled = true; };
-  }, [productType, category, enabled, refreshVersion, getCachedProducts, setCachedProducts, getStaticData]);
+  }, [productType, category, enabled, refreshVersion, verifiedOnly, getCachedProducts, setCachedProducts, getStaticData]);
 
   const refresh = useCallback(() => {
     // 캐시 클리어 후 재로드
     try {
-      const cacheKey = `${CACHE_KEY_PREFIX}${productType}_${category || 'all'}`;
+      const cacheKey = `${CACHE_KEY_PREFIX}${productType}_${category || 'all'}_${verifiedOnly ? 'verified' : 'all'}`;
       sessionStorage.removeItem(cacheKey);
     } catch { /* ignore */ }
     setRefreshVersion(v => v + 1);
-  }, [productType, category]);
+  }, [productType, category, verifiedOnly]);
 
   return { products, isLoading, isFromApi, lastSync, totalCount, error, refresh };
 }

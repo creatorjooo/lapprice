@@ -4,12 +4,24 @@ import { Star, TrendingDown, ChevronDown, ChevronUp, ExternalLink, Zap, BarChart
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
-import { monitors as staticMonitors, monitorCategories, monitorSortOptions } from '@/data/monitors';
-import { useProducts } from '@/hooks/useProducts';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from '@/components/ui/dialog';
+import ProductImage from '@/components/ProductImage';
+import PriceHistoryChart from '@/components/PriceHistoryChart';
+import { monitors as staticMonitors, monitorCategories, monitorSortOptions, monitorPriceHistory } from '@/data/monitors';
+import { usePriceHistory, useProducts } from '@/hooks/useProducts';
 import { useAffiliateBatch, isCoupangUrl } from '@/hooks/useAffiliateLink';
+import { useVerifiedRedirect } from '@/hooks/useVerifiedRedirect';
 import { trackAffiliateClick, getPlatformKey, isAffiliatePlatform } from '@/utils/tracking';
+import { getStoreHref, getStoreTrackingUrl, getStoreVerifiedPrice, isStoreVerified } from '@/utils/offers';
 import { cn } from '@/lib/utils';
-import type { Monitor, MonitorFilterState } from '@/types';
+import { formatStoreUpdatedAt } from '@/utils/time';
+import type { Monitor, MonitorFilterState, PriceHistory } from '@/types';
 
 interface MonitorPageProps {
   wishlist: string[];
@@ -39,7 +51,7 @@ export default function MonitorPage({
 
   // API 자동 데이터 + 정적 데이터 fallback
   const { products: apiMonitors, isLoading: isApiLoading, isFromApi, lastSync, refresh } = useProducts<Monitor>('monitor');
-  const monitors = isFromApi && apiMonitors.length > 0 ? apiMonitors : staticMonitors;
+  const monitors = isFromApi ? apiMonitors : staticMonitors;
 
   // Navbar의 서브메뉴 section명을 실제 카테고리명으로 매핑
   const sectionToCategory: Record<string, string> = {
@@ -47,6 +59,12 @@ export default function MonitorPage({
     'mon-pro': 'professional',
     'mon-ultrawide': 'ultrawide',
     'mon-general': 'general',
+  };
+  const categoryToSection: Record<string, string> = {
+    gaming: 'mon-gaming',
+    professional: 'mon-pro',
+    ultrawide: 'mon-ultrawide',
+    general: 'mon-general',
   };
   const mappedCategory = category ? (sectionToCategory[category] || category) : null;
 
@@ -72,12 +90,17 @@ export default function MonitorPage({
 
   const handleCategorySelect = useCallback((cat: string) => {
     if (onNavigateToPage) {
-      onNavigateToPage(`monitor-${cat}`);
+      if (cat === 'all') {
+        onNavigateToPage('monitor');
+        return;
+      }
+      const section = categoryToSection[cat] || cat;
+      onNavigateToPage(`monitor-${section}`);
     } else {
       setFilters(prev => ({ ...prev, category: cat === 'all' ? [] : [cat] }));
       productListRef.current?.scrollIntoView({ behavior: 'smooth' });
     }
-  }, [onNavigateToPage]);
+  }, [categoryToSection, onNavigateToPage]);
 
   // 모니터 필터링
   const filteredMonitors = useMemo(() => {
@@ -205,7 +228,8 @@ export default function MonitorPage({
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
               {filteredMonitors.map((monitor) => {
                 const isWishlisted = wishlist.includes(monitor.id);
-                const isCompared = compareList.includes(monitor.id);
+                const compareKey = `monitor:${monitor.id}`;
+                const isCompared = compareList.includes(compareKey);
                 return (
                   <Card key={monitor.id} className="overflow-hidden hover:shadow-lg transition-shadow">
                     <div className="p-6">
@@ -218,7 +242,7 @@ export default function MonitorPage({
                           <button onClick={() => onToggleWishlist(monitor.id)} className={cn("p-1.5 rounded-full", isWishlisted ? "text-red-500" : "text-slate-300 hover:text-red-400")}>
                             <Heart className="w-4 h-4" fill={isWishlisted ? 'currentColor' : 'none'} />
                           </button>
-                          <button onClick={() => onToggleCompare(monitor.id)} className={cn("p-1.5 rounded-full", isCompared ? "text-blue-500" : "text-slate-300 hover:text-blue-400")}>
+                          <button onClick={() => onToggleCompare(compareKey)} className={cn("p-1.5 rounded-full", isCompared ? "text-blue-500" : "text-slate-300 hover:text-blue-400")}>
                             <BarChart3 className="w-4 h-4" />
                           </button>
                           <button onClick={() => onSetPriceAlert(monitor.id)} className="p-1.5 rounded-full text-slate-300 hover:text-amber-400">
@@ -226,7 +250,12 @@ export default function MonitorPage({
                           </button>
                         </div>
                       </div>
-                      {monitor.images?.[0] && <img src={monitor.images[0]} alt={monitor.name} className="w-full h-40 object-contain mb-3 rounded" />}
+                      <ProductImage
+                        src={monitor.images?.[0]}
+                        alt={monitor.name}
+                        className="w-full h-40 object-contain mb-3 rounded"
+                        fallbackText={monitor.name}
+                      />
                       <div className="flex items-end gap-2 mb-3">
                         <span className="text-2xl font-bold text-slate-900">{monitor.prices.current.toLocaleString()}원</span>
                         {monitor.discount.percent > 0 && <Badge variant="destructive" className="text-xs">-{monitor.discount.percent}%</Badge>}
@@ -236,13 +265,15 @@ export default function MonitorPage({
                       </div>
                       <div className="flex gap-2">
                         {monitor.stores?.slice(0, 2).map((store, idx) => {
-                          const platform = getPlatformKey(store.url);
+                          const href = getStoreHref(store);
+                          const trackingUrl = getStoreTrackingUrl(store) || href;
+                          const platform = getPlatformKey(store.store);
                           return (
-                            <a key={idx} href={store.url} target="_blank" rel="noopener noreferrer"
-                              onClick={() => { if (isAffiliatePlatform(platform)) trackAffiliateClick({ productId: monitor.id, platform, source: 'productcard', url: store.url, productName: monitor.name }); }}
+                            <a key={idx} href={href} target="_blank" rel="noopener noreferrer"
+                              onClick={() => { if (isAffiliatePlatform(store.store)) trackAffiliateClick({ productId: monitor.id, platform, source: 'productcard', url: trackingUrl, productName: monitor.name }); }}
                               className="flex-1 text-center py-2 text-sm font-medium bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
                             >
-                              {isCoupangUrl(store.url) ? '쿠팡' : store.store || '최저가 보기'} <ExternalLink className="w-3 h-3 inline ml-1" />
+                              {isCoupangUrl(trackingUrl) ? '쿠팡' : store.store || '최저가 보기'} <ExternalLink className="w-3 h-3 inline ml-1" />
                             </a>
                           );
                         })}
@@ -412,7 +443,7 @@ export default function MonitorPage({
                 key={monitor.id}
                 monitor={monitor}
                 isWishlisted={wishlist.includes(monitor.id)}
-                isCompared={compareList.includes(monitor.id)}
+                isCompared={compareList.includes(`monitor:${monitor.id}`)}
                 onToggleWishlist={onToggleWishlist}
                 onToggleCompare={onToggleCompare}
                 onSetPriceAlert={onSetPriceAlert}
@@ -455,28 +486,42 @@ function MonitorProductCard({
   onSetPriceAlert: (id: string) => void;
 }) {
   const [isExpanded, setIsExpanded] = useState(false);
+  const [showPriceHistory, setShowPriceHistory] = useState(false);
   const savingsPercent = Math.round(((monitor.prices.original - monitor.prices.current) / monitor.prices.original) * 100);
   const isPriceGood = monitor.priceIndex >= 80;
+  const staticPriceHistory = monitorPriceHistory[monitor.id] || [];
+  const { history: apiPriceHistory } = usePriceHistory(showPriceHistory ? monitor.id : null);
+  const { openVerifiedLink, redirectError, clearRedirectError } = useVerifiedRedirect();
+  const chartData: PriceHistory[] = (apiPriceHistory.length > 0 ? apiPriceHistory : staticPriceHistory).length > 0
+    ? (apiPriceHistory.length > 0 ? apiPriceHistory : staticPriceHistory)
+    : [{ date: '오늘', price: monitor.prices.current, store: '현재가' }];
 
-  // 어필리에이트 링크 변환
-  const storeUrls = monitor.stores.map(s => s.url);
-  const affiliateUrls = useAffiliateBatch(storeUrls, `monitor_${monitor.id}`);
+  // 검증 스토어 우선(정적 fallback은 기존 전체 노출)
+  const sortedStores = useMemo(() => {
+    const hasVerificationState = monitor.stores.some((store) => !!store.verificationStatus);
+    const baseStores = hasVerificationState
+      ? monitor.stores.filter((store) => store.verificationStatus === 'verified' && store.isActive !== false)
+      : monitor.stores;
 
-  // 어필리에이트 스토어 우선 정렬
-  const sortedStores = [...monitor.stores].sort((a, b) => {
-    const aIsAffiliate = isAffiliatePlatform(a.store) || isCoupangUrl(a.url);
-    const bIsAffiliate = isAffiliatePlatform(b.store) || isCoupangUrl(b.url);
-    if (aIsAffiliate && !bIsAffiliate) return -1;
-    if (!aIsAffiliate && bIsAffiliate) return 1;
-    return a.price - b.price;
-  });
+    return [...baseStores].sort((a, b) => getStoreVerifiedPrice(a) - getStoreVerifiedPrice(b));
+  }, [monitor.stores]);
 
-  // 최저가 어필리에이트 스토어 또는 전체 최저가
-  const affiliateStore = sortedStores.find(s => isAffiliatePlatform(s.store) || isCoupangUrl(s.url));
-  const lowestStore = sortedStores.reduce((min, s) => s.price < min.price ? s : min, sortedStores[0]);
-  const ctaStore = affiliateStore || lowestStore;
-  const ctaStoreIdx = monitor.stores.indexOf(ctaStore);
-  const ctaUrl = (affiliateUrls as Record<number, string>)[ctaStoreIdx] || ctaStore.url;
+  const storeUrls = useMemo(() => sortedStores.map((store) => getStoreTrackingUrl(store)), [sortedStores]);
+  const { affiliateUrls } = useAffiliateBatch(storeUrls, `monitor_${monitor.id}`);
+
+  const ctaStore = sortedStores[0];
+  const ctaStoreIdx = ctaStore ? sortedStores.indexOf(ctaStore) : -1;
+  const ctaHref = useMemo(() => {
+    if (!ctaStore) return undefined;
+    const baseHref = getStoreHref(ctaStore);
+    if (baseHref.startsWith('/r/')) return baseHref;
+    return ctaStoreIdx >= 0 ? ((affiliateUrls as Record<number, string>)[ctaStoreIdx] || baseHref) : baseHref;
+  }, [ctaStore, ctaStoreIdx, affiliateUrls]);
+  const ctaTrackingUrl = ctaStore ? getStoreTrackingUrl(ctaStore) : '';
+  const absoluteLowestPrice = useMemo(
+    () => (sortedStores.length > 0 ? Math.min(...sortedStores.map((store) => getStoreVerifiedPrice(store))) : 0),
+    [sortedStores],
+  );
 
   // 구매 타이밍 어드바이저
   const timingAdvice = monitor.prices.current <= monitor.prices.lowest
@@ -490,14 +535,17 @@ function MonitorProductCard({
   // 이미지: http URL이면 실제 이미지, 아니면 이모지 fallback
   const imageUrl = monitor.images?.[0]?.startsWith('http') ? monitor.images[0] : null;
 
-  const handleCtaClick = () => {
+  const handleCtaClick = async () => {
+    if (!ctaStore || !ctaHref) return;
+    clearRedirectError();
     trackAffiliateClick({
       productId: monitor.id,
       platform: getPlatformKey(ctaStore.store),
       source: 'cta_button',
-      url: ctaUrl,
+      url: ctaTrackingUrl || ctaHref,
       productName: monitor.name,
     });
+    await openVerifiedLink(ctaHref);
   };
 
   const handleStoreClick = (store: typeof monitor.stores[0], url: string) => {
@@ -524,7 +572,7 @@ function MonitorProductCard({
         <Button variant="secondary" size="icon" className="w-7 h-7 rounded-full bg-white/90" onClick={() => onToggleWishlist(monitor.id)}>
           <Heart className={cn('w-3.5 h-3.5', isWishlisted && 'fill-rose-500 text-rose-500')} />
         </Button>
-        <Button variant="secondary" size="icon" className={cn('w-7 h-7 rounded-full bg-white/90', isCompared && 'ring-2 ring-purple-500')} onClick={() => onToggleCompare(monitor.id)}>
+        <Button variant="secondary" size="icon" className={cn('w-7 h-7 rounded-full bg-white/90', isCompared && 'ring-2 ring-purple-500')} onClick={() => onToggleCompare(`monitor:${monitor.id}`)}>
           <BarChart3 className="w-3.5 h-3.5" />
         </Button>
       </div>
@@ -536,11 +584,12 @@ function MonitorProductCard({
             <Badge className="bg-gradient-to-r from-purple-500 to-pink-500 text-white text-[10px] font-bold px-2 py-0.5 shadow-md">{monitor.editorPick}</Badge>
           </div>
         )}
-        {imageUrl ? (
-          <img src={imageUrl} alt={monitor.name} className="w-full h-full object-contain p-2" loading="lazy" />
-        ) : (
-          <div className="text-4xl lg:text-5xl">🖥️</div>
-        )}
+        <ProductImage
+          src={imageUrl || monitor.images?.[0]}
+          alt={monitor.name}
+          className="w-full h-full object-contain p-2"
+          fallbackText={monitor.name}
+        />
         <div className="absolute bottom-2 left-2 flex gap-1">
           <Badge className={cn('text-[10px] font-bold px-1.5 py-0 h-5', isPriceGood ? 'bg-emerald-500/90 text-white' : 'bg-amber-500/90 text-white')}>
             가격지수 {monitor.priceIndex}
@@ -599,45 +648,67 @@ function MonitorProductCard({
         </div>
 
         {/* CTA */}
-        <a
-          href={ctaUrl}
-          target="_blank"
-          rel="noopener noreferrer"
-          onClick={handleCtaClick}
-          className="flex items-center justify-center gap-1.5 w-full h-9 mb-2 rounded-lg bg-gradient-to-r from-purple-600 to-purple-700 hover:from-purple-700 hover:to-purple-800 text-white text-xs font-semibold transition-all shadow-sm hover:shadow-md"
-        >
-          <Zap className="w-3.5 h-3.5" />
-          {ctaStore.store}에서 {ctaStore.price.toLocaleString()}원
-          {(isAffiliatePlatform(ctaStore.store) || isCoupangUrl(ctaStore.url)) && <span className="text-[9px] bg-white/20 px-1 rounded">제휴</span>}
-          <ExternalLink className="w-3 h-3 opacity-60" />
-        </a>
+        {ctaStore && (
+          <button
+            type="button"
+            onClick={handleCtaClick}
+            className="flex items-center justify-center gap-1.5 w-full h-9 mb-2 rounded-lg bg-gradient-to-r from-purple-600 to-purple-700 hover:from-purple-700 hover:to-purple-800 text-white text-xs font-semibold transition-all shadow-sm hover:shadow-md"
+          >
+            <Zap className="w-3.5 h-3.5" />
+            {ctaStore.store}에서 {getStoreVerifiedPrice(ctaStore).toLocaleString()}원
+            {(isAffiliatePlatform(ctaStore.store) || isCoupangUrl(ctaTrackingUrl)) && <span className="text-[9px] bg-white/20 px-1 rounded">제휴</span>}
+            <ExternalLink className="w-3 h-3 opacity-60" />
+          </button>
+        )}
+
+        {redirectError && (
+          <p className="text-[10px] text-rose-600 mb-2">{redirectError}</p>
+        )}
 
         {/* Stores */}
         <div className="space-y-1 mb-2">
           {sortedStores.slice(0, isExpanded ? undefined : 2).map((store, idx) => {
-            const origIdx = monitor.stores.indexOf(store);
-            const storeUrl = (affiliateUrls as Record<number, string>)[origIdx] || store.url;
-            const isAff = isAffiliatePlatform(store.store) || isCoupangUrl(store.url);
+            const baseHref = getStoreHref(store);
+            const trackingUrl = getStoreTrackingUrl(store) || baseHref;
+            const storeUrl = baseHref.startsWith('/r/')
+              ? baseHref
+              : ((affiliateUrls as Record<number, string>)[idx] || baseHref);
+            const isAff = isAffiliatePlatform(store.store) || isCoupangUrl(trackingUrl);
+            const storePrice = getStoreVerifiedPrice(store);
             return (
-              <a key={idx} href={storeUrl} target="_blank" rel="noopener noreferrer"
-                onClick={() => handleStoreClick(store, storeUrl)}
-                className={cn('flex items-center justify-between p-1.5 rounded-md transition-colors', isAff ? 'bg-purple-50 hover:bg-purple-100' : 'bg-slate-50 hover:bg-slate-100')}
+              <button
+                type="button"
+                key={idx}
+                onClick={async () => {
+                  clearRedirectError();
+                  handleStoreClick(store, trackingUrl);
+                  await openVerifiedLink(storeUrl);
+                }}
+                className={cn('flex w-full items-center justify-between p-1.5 rounded-md transition-colors text-left', isAff ? 'bg-purple-50 hover:bg-purple-100' : 'bg-slate-50 hover:bg-slate-100')}
               >
                 <div className="flex items-center gap-1.5">
                   <span className="text-sm">{store.storeLogo}</span>
                   <div>
                     <p className="text-xs font-medium flex items-center gap-1">
                       {store.store}
+                      {storePrice === absoluteLowestPrice && <span className="text-[9px] bg-emerald-100 text-emerald-600 px-1 rounded">최저가</span>}
                       {isAff && <span className="text-[9px] bg-blue-100 text-blue-600 px-1 rounded">제휴</span>}
                     </p>
-                    <p className="text-[10px] text-slate-400">{store.updatedAt}</p>
+                    <p className="text-[10px] text-slate-400">
+                      {isStoreVerified(store)
+                        ? `검증 ${formatStoreUpdatedAt(store.verifiedAt || store.updatedAt)}`
+                        : formatStoreUpdatedAt(store.updatedAt)}
+                    </p>
                   </div>
                 </div>
-                <p className="text-xs font-bold">{store.price.toLocaleString()}원</p>
-              </a>
+                <p className="text-xs font-bold">{storePrice.toLocaleString()}원</p>
+              </button>
             );
           })}
         </div>
+        <p className="text-[10px] text-slate-400 mb-2">
+          검증 완료된 가격만 노출되며, 클릭 시 최신가를 다시 확인합니다.
+        </p>
 
         {sortedStores.length > 2 && (
           <Button variant="ghost" size="sm" className="w-full h-7 text-xs mb-2" onClick={() => setIsExpanded(!isExpanded)}>
@@ -646,9 +717,24 @@ function MonitorProductCard({
         )}
 
         <div className="flex gap-1.5 mt-auto">
-          <Button variant="outline" size="sm" className="flex-1 h-8 text-xs" onClick={() => onSetPriceAlert(monitor.id)}>
-            <Bell className="w-3.5 h-3.5 mr-1" />
-            가격 알림
+          <Dialog open={showPriceHistory} onOpenChange={setShowPriceHistory}>
+            <DialogTrigger asChild>
+              <Button variant="outline" size="sm" className="flex-1 h-8 text-xs">
+                <BarChart3 className="w-3.5 h-3.5 mr-1" />
+                가격 추이
+              </Button>
+            </DialogTrigger>
+            <DialogContent className="max-w-2xl">
+              <DialogHeader>
+                <DialogTitle>{monitor.name} 가격 추이</DialogTitle>
+              </DialogHeader>
+              <div className="h-80 mt-4">
+                <PriceHistoryChart data={chartData} color="#9333ea" />
+              </div>
+            </DialogContent>
+          </Dialog>
+          <Button variant="outline" size="sm" className="h-8 px-2" onClick={() => onSetPriceAlert(monitor.id)}>
+            <Bell className="w-3.5 h-3.5" />
           </Button>
         </div>
       </div>

@@ -8,13 +8,14 @@ const { fetchWithUA, parsePrice, getCachedResult, setCachedResult } = require('.
  * GET /api/gmarket?keyword=노트북
  */
 router.get('/', async (req, res) => {
-  const { keyword } = req.query;
+  const { keyword, limit = '20' } = req.query;
 
   if (!keyword) {
     return res.status(400).json({ source: 'gmarket', available: false, products: [], error: '검색어 필요' });
   }
 
-  const cacheKey = `gmarket:${keyword}`;
+  const parsedLimit = Math.max(5, Math.min(100, parseInt(limit, 10) || 20));
+  const cacheKey = `gmarket:${keyword}:${parsedLimit}`;
   const cached = getCachedResult(cacheKey);
   if (cached) return res.json(cached);
 
@@ -32,7 +33,7 @@ router.get('/', async (req, res) => {
 
     // G마켓 검색 결과 파싱
     $('div.box__item-container, li.box__item-container').each((i, el) => {
-      if (i >= 20) return false;
+      if (i >= parsedLimit) return false;
       const $el = $(el);
       const title = $el.find('span.text__item-title, a.link__item-title, .text__item').text().trim();
       const priceText = $el.find('strong.text__value, span.text__value, .box__price-seller strong').text().trim();
