@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import type { Product, Laptop, Monitor, Desktop, ProductType, PriceHistory } from '@/types';
+import type { Product, ProductType, PriceHistory } from '@/types';
 import { laptops as staticLaptops } from '@/data/laptops';
 import { monitors as staticMonitors } from '@/data/monitors';
 import { desktops as staticDesktops } from '@/data/desktops';

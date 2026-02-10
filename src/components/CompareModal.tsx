@@ -211,7 +211,7 @@ function CompareActionButtons({ laptops }: { laptops: Laptop[] }) {
       <div />
       {laptops.map((laptop, idx) => {
         const store = bestStores[idx];
-        const url = affiliateUrls[idx] || store.url;
+        const url = (affiliateUrls as Record<number, string>)[idx] || store.url;
         const isAff = isAffiliatePlatform(store.store) || isCoupangUrl(store.url);
         return (
           <Button key={laptop.id} className="w-full" asChild>

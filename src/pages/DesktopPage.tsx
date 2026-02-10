@@ -1,10 +1,10 @@
 import { useState, useMemo, useRef, useCallback } from 'react';
 import { motion } from 'framer-motion';
-import { ArrowRight, Star, TrendingDown, ChevronDown, ChevronUp, ExternalLink, Zap, BarChart3, Bell, Heart, RefreshCw, Wifi, WifiOff } from 'lucide-react';
+import { Star, TrendingDown, ChevronDown, ChevronUp, ExternalLink, Zap, BarChart3, Bell, Heart, RefreshCw, Wifi, WifiOff } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
-import { desktops as staticDesktops, desktopCategories, desktopSortOptions, desktopPriceHistory } from '@/data/desktops';
+import { desktops as staticDesktops, desktopCategories, desktopSortOptions } from '@/data/desktops';
 import { useProducts } from '@/hooks/useProducts';
 import { useAffiliateBatch, isCoupangUrl } from '@/hooks/useAffiliateLink';
 import { trackAffiliateClick, getPlatformKey, isAffiliatePlatform } from '@/utils/tracking';
@@ -306,7 +306,7 @@ function DesktopProductCard({
   const lowestStore = sortedStores.reduce((min, s) => s.price < min.price ? s : min, sortedStores[0]);
   const ctaStore = affiliateStore || lowestStore;
   const ctaStoreIdx = desktop.stores.indexOf(ctaStore);
-  const ctaUrl = affiliateUrls[ctaStoreIdx] || ctaStore.url;
+  const ctaUrl = (affiliateUrls as Record<number, string>)[ctaStoreIdx] || ctaStore.url;
 
   // 구매 타이밍 어드바이저
   const timingAdvice = desktop.prices.current <= desktop.prices.lowest
@@ -441,7 +441,7 @@ function DesktopProductCard({
         <div className="space-y-1 mb-2">
           {sortedStores.slice(0, isExpanded ? undefined : 2).map((store, idx) => {
             const origIdx = desktop.stores.indexOf(store);
-            const storeUrl = affiliateUrls[origIdx] || store.url;
+            const storeUrl = (affiliateUrls as Record<number, string>)[origIdx] || store.url;
             const isAff = isAffiliatePlatform(store.store) || isCoupangUrl(store.url);
             return (
               <a key={idx} href={storeUrl} target="_blank" rel="noopener noreferrer"

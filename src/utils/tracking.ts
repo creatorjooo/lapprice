@@ -6,7 +6,7 @@
 interface ClickTrackData {
   productId?: string;
   platform: string;
-  source: 'productcard' | 'navbar_search' | 'cta_button' | 'compare' | 'other';
+  source: 'productcard' | 'navbar_search' | 'cta_button' | 'compare' | 'compare_modal' | 'apple_section' | 'other';
   url: string;
   productName?: string;
 }

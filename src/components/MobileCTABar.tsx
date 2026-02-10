@@ -6,7 +6,7 @@ interface MobileCTABarProps {
   onNavigateToPage: (page: string) => void;
 }
 
-export default function MobileCTABar({ currentPage, onNavigateToPage }: MobileCTABarProps) {
+export default function MobileCTABar({ currentPage, onNavigateToPage: _onNavigateToPage }: MobileCTABarProps) {
   const [isVisible, setIsVisible] = useState(false);
 
   useEffect(() => {

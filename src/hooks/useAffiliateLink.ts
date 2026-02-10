@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useRef } from 'react';
 
 interface AffiliateLink {
   originalUrl: string;
@@ -81,7 +81,7 @@ async function convertBatchUrls(urls: string[], subId: string): Promise<string[]
       const data = await response.json();
       const links: AffiliateLink[] = data.links || [];
 
-      links.forEach((link, i) => {
+      links.forEach((link) => {
         const cacheKey = `${link.originalUrl}:${subId}`;
         globalCache[cacheKey] = link.affiliateUrl;
       });
