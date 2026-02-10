@@ -116,8 +116,12 @@ export default function ProductShowcase({
                   }`}
                   onClick={ctaAction}
                 >
-                  <div className="aspect-square flex items-center justify-center mb-4">
-                    <span className="text-4xl sm:text-5xl group-hover:scale-110 transition-transform">💻</span>
+                  <div className="aspect-square flex items-center justify-center mb-4 overflow-hidden rounded-xl">
+                    {laptop.images?.[0]?.startsWith('http') ? (
+                      <img src={laptop.images[0]} alt={laptop.name} className="w-full h-full object-contain group-hover:scale-110 transition-transform" loading="lazy" />
+                    ) : (
+                      <span className="text-4xl sm:text-5xl group-hover:scale-110 transition-transform">💻</span>
+                    )}
                   </div>
                   <p className={`text-xs ${textColor === 'light' ? 'text-slate-400' : 'text-slate-500'}`}>
                     {laptop.brand}

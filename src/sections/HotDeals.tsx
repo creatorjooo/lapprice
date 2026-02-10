@@ -3,7 +3,7 @@ import { motion, useInView } from 'framer-motion';
 import { Zap, ExternalLink, TrendingDown } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import type { Laptop } from '@/types';
-import { isAffiliatePlatform } from '@/utils/tracking';
+import { isAffiliatePlatform, trackAffiliateClick, getPlatformKey } from '@/utils/tracking';
 
 interface HotDealsProps {
   laptops: Laptop[];
@@ -80,8 +80,10 @@ export default function HotDeals({ laptops }: HotDealsProps) {
 
                 {/* Product Info */}
                 <div className="flex items-center gap-4 mb-4">
-                  <div className="w-16 h-16 bg-slate-700/50 rounded-xl flex items-center justify-center text-3xl shrink-0">
-                    💻
+                  <div className="w-16 h-16 bg-slate-700/50 rounded-xl flex items-center justify-center text-3xl shrink-0 overflow-hidden">
+                    {laptop.images?.[0]?.startsWith('http') ? (
+                      <img src={laptop.images[0]} alt={laptop.name} className="w-full h-full object-contain" loading="lazy" />
+                    ) : '💻'}
                   </div>
                   <div className="min-w-0">
                     <p className="text-xs text-slate-400">{laptop.brand}</p>
@@ -112,6 +114,7 @@ export default function HotDeals({ laptops }: HotDealsProps) {
                   href={affiliateStore.url}
                   target="_blank"
                   rel="noopener noreferrer"
+                  onClick={() => trackAffiliateClick({ productId: laptop.id, platform: getPlatformKey(affiliateStore.store), source: 'cta_button', url: affiliateStore.url, productName: laptop.name })}
                   className="flex items-center justify-center gap-2 w-full py-3 bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 text-white rounded-xl font-semibold text-sm transition-all shadow-md hover:shadow-lg"
                 >
                   <Zap className="w-4 h-4" />

@@ -33,9 +33,13 @@ export default function CompareModal({
   }
 
   const compareFields = [
-    { label: '이미지', key: 'image', render: (_laptop: Laptop) => (
-      <div className="aspect-[4/3] bg-gradient-to-br from-slate-100 to-slate-200 dark:from-slate-700 dark:to-slate-600 rounded-lg flex items-center justify-center">
-        <span className="text-4xl">💻</span>
+    { label: '이미지', key: 'image', render: (laptop: Laptop) => (
+      <div className="aspect-[4/3] bg-gradient-to-br from-slate-100 to-slate-200 dark:from-slate-700 dark:to-slate-600 rounded-lg flex items-center justify-center overflow-hidden">
+        {laptop.images?.[0]?.startsWith('http') ? (
+          <img src={laptop.images[0]} alt={laptop.name} className="w-full h-full object-contain" loading="lazy" />
+        ) : (
+          <span className="text-4xl">💻</span>
+        )}
       </div>
     )},
     { label: '가격', key: 'price', render: (laptop: Laptop) => (

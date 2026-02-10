@@ -6,7 +6,7 @@ interface MobileCTABarProps {
   onNavigateToPage: (page: string) => void;
 }
 
-export default function MobileCTABar({ currentPage, onNavigateToPage: _onNavigateToPage }: MobileCTABarProps) {
+export default function MobileCTABar({ currentPage, onNavigateToPage }: MobileCTABarProps) {
   const [isVisible, setIsVisible] = useState(false);
 
   useEffect(() => {
@@ -36,11 +36,12 @@ export default function MobileCTABar({ currentPage, onNavigateToPage: _onNavigat
       <div className="bg-gradient-to-r from-blue-600 to-indigo-600 px-4 py-3 safe-area-inset-bottom">
         <button
           onClick={() => {
-            // 핫딜 섹션으로 스크롤
+            // 핫딜 섹션으로 스크롤, 없으면 해당 페이지로 이동
             const hotDealSection = document.getElementById('hot-deals');
             if (hotDealSection) {
               hotDealSection.scrollIntoView({ behavior: 'smooth' });
             } else {
+              onNavigateToPage(currentPage);
               window.scrollTo({ top: 0, behavior: 'smooth' });
             }
           }}

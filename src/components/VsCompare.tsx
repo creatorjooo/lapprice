@@ -3,7 +3,7 @@ import { motion, useInView } from 'framer-motion';
 import { ExternalLink } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import type { Laptop } from '@/types';
-import { isAffiliatePlatform } from '@/utils/tracking';
+import { isAffiliatePlatform, trackAffiliateClick, getPlatformKey } from '@/utils/tracking';
 
 interface VsCompareProps {
   laptops: Laptop[];
@@ -127,6 +127,7 @@ export default function VsCompare({ laptops }: VsCompareProps) {
                     href={storeA.url}
                     target="_blank"
                     rel="noopener noreferrer"
+                    onClick={() => trackAffiliateClick({ productId: laptopA.id, platform: getPlatformKey(storeA.store), source: 'compare', url: storeA.url, productName: laptopA.name })}
                     className="flex items-center justify-center gap-1 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold transition-colors"
                   >
                     {laptopA.name.split(' ')[0]} 구매
@@ -136,6 +137,7 @@ export default function VsCompare({ laptops }: VsCompareProps) {
                     href={storeB.url}
                     target="_blank"
                     rel="noopener noreferrer"
+                    onClick={() => trackAffiliateClick({ productId: laptopB.id, platform: getPlatformKey(storeB.store), source: 'compare', url: storeB.url, productName: laptopB.name })}
                     className="flex items-center justify-center gap-1 py-2 bg-slate-800 hover:bg-slate-900 text-white rounded-lg text-xs font-semibold transition-colors"
                   >
                     {laptopB.name.split(' ')[0]} 구매

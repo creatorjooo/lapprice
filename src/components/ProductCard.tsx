@@ -197,7 +197,11 @@ export default function ProductCard({
               </Badge>
             </div>
           )}
-          <div className="text-4xl lg:text-5xl">💻</div>
+          {laptop.images?.[0]?.startsWith('http') ? (
+            <img src={laptop.images[0]} alt={laptop.name} className="w-full h-full object-contain" loading="lazy" />
+          ) : (
+            <div className="text-4xl lg:text-5xl">💻</div>
+          )}
           {/* Price Index Badge + Editor Score */}
           <div className="absolute bottom-2 left-2 flex gap-1">
             <Badge

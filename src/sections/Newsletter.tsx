@@ -32,9 +32,7 @@ export default function Newsletter() {
         setError(data.error || '구독에 실패했습니다. 다시 시도해주세요.');
       }
     } catch {
-      // 서버가 꺼져있어도 로컬에서 성공으로 처리 (데모용)
-      setIsSubmitted(true);
-      setEmail('');
+      setError('서버에 연결할 수 없습니다. 잠시 후 다시 시도해주세요.');
     } finally {
       setIsLoading(false);
     }
