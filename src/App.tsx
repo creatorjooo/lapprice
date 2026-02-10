@@ -22,14 +22,27 @@ import './App.css';
 type PageType = 'home' | 'laptop' | 'monitor' | 'desktop' | 'admin';
 
 function App() {
-  // ─── 해시 라우팅 ───
+  // ─── 해시 라우팅 (카테고리 서브페이지 지원) ───
   const [currentPage, setCurrentPage] = useState<PageType>('home');
+  const [currentCategory, setCurrentCategory] = useState<string | null>(null);
 
   useEffect(() => {
     const detectPage = () => {
       const hash = window.location.hash.replace('#', '') || 'home';
       const validPages: PageType[] = ['home', 'laptop', 'monitor', 'desktop', 'admin'];
-      setCurrentPage(validPages.includes(hash as PageType) ? (hash as PageType) : 'home');
+
+      // 서브페이지 지원: laptop-gaming, monitor-pro 등
+      const parts = hash.split('-');
+      const basePage = parts[0] as PageType;
+      const category = parts.length > 1 ? parts.slice(1).join('-') : null;
+
+      if (validPages.includes(basePage)) {
+        setCurrentPage(basePage);
+        setCurrentCategory(category);
+      } else {
+        setCurrentPage('home');
+        setCurrentCategory(null);
+      }
     };
     detectPage();
     window.addEventListener('hashchange', detectPage);
@@ -213,9 +226,9 @@ function App() {
           <RecentlyViewed items={recentlyViewed} onNavigateToPage={navigateToPage} />
         )}
         {currentPage === 'home' && <HomePage onNavigateToPage={navigateToPage} />}
-        {currentPage === 'laptop' && <LaptopPage {...pageProps} />}
-        {currentPage === 'monitor' && <MonitorPage {...pageProps} />}
-        {currentPage === 'desktop' && <DesktopPage {...pageProps} />}
+        {currentPage === 'laptop' && <LaptopPage {...pageProps} category={currentCategory} onNavigateToPage={navigateToPage} />}
+        {currentPage === 'monitor' && <MonitorPage {...pageProps} category={currentCategory} onNavigateToPage={navigateToPage} />}
+        {currentPage === 'desktop' && <DesktopPage {...pageProps} category={currentCategory} onNavigateToPage={navigateToPage} />}
       </main>
 
       <Newsletter />

@@ -15,21 +15,25 @@ interface MonitorPageProps {
   wishlist: string[];
   compareList: string[];
   searchQuery: string;
+  category?: string | null;
   onToggleWishlist: (id: string) => void;
   onToggleCompare: (id: string) => void;
   onSetPriceAlert: (id: string) => void;
   onOpenCompare: () => void;
   onSearch: (query: string) => void;
+  onNavigateToPage?: (page: string) => void;
 }
 
 export default function MonitorPage({
   wishlist,
   compareList,
   searchQuery,
+  category,
   onToggleWishlist,
   onToggleCompare,
   onSetPriceAlert,
   onSearch,
+  onNavigateToPage,
 }: MonitorPageProps) {
   const productListRef = useRef<HTMLDivElement>(null);
 
@@ -37,8 +41,24 @@ export default function MonitorPage({
   const { products: apiMonitors, isLoading: isApiLoading, isFromApi, lastSync, refresh } = useProducts<Monitor>('monitor');
   const monitors = isFromApi && apiMonitors.length > 0 ? apiMonitors : staticMonitors;
 
+  // Navbar의 서브메뉴 section명을 실제 카테고리명으로 매핑
+  const sectionToCategory: Record<string, string> = {
+    'mon-gaming': 'gaming',
+    'mon-pro': 'professional',
+    'mon-ultrawide': 'ultrawide',
+    'mon-general': 'general',
+  };
+  const mappedCategory = category ? (sectionToCategory[category] || category) : null;
+
+  const monCategoryLabels: Record<string, string> = {
+    gaming: '게이밍 모니터',
+    professional: '전문가용 모니터',
+    ultrawide: '울트라와이드 모니터',
+    general: '가성비 모니터',
+  };
+
   const [filters, setFilters] = useState<MonitorFilterState>({
-    category: [],
+    category: mappedCategory ? [mappedCategory] : [],
     brand: [],
     priceRange: [0, 5000000],
     panelType: [],
@@ -50,10 +70,14 @@ export default function MonitorPage({
     sort: 'discount',
   });
 
-  const handleCategorySelect = useCallback((category: string) => {
-    setFilters(prev => ({ ...prev, category: category === 'all' ? [] : [category] }));
-    productListRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, []);
+  const handleCategorySelect = useCallback((cat: string) => {
+    if (onNavigateToPage) {
+      onNavigateToPage(`monitor-${cat}`);
+    } else {
+      setFilters(prev => ({ ...prev, category: cat === 'all' ? [] : [cat] }));
+      productListRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [onNavigateToPage]);
 
   // 모니터 필터링
   const filteredMonitors = useMemo(() => {
@@ -129,6 +153,108 @@ export default function MonitorPage({
     { label: '화면 크기', key: 'screenSize' as const, options: ['24"', '27"', '32"', '34"+'] },
   ];
 
+  // ─── 카테고리 서브페이지 모드 ───
+  if (mappedCategory) {
+    const catLabel = monCategoryLabels[mappedCategory] || mappedCategory;
+    return (
+      <>
+        <section className="bg-gradient-to-br from-purple-900 via-purple-800 to-indigo-900 pt-20 pb-12">
+          <div className="max-w-[1400px] mx-auto px-4 sm:px-6">
+            <button
+              onClick={() => onNavigateToPage?.('monitor')}
+              className="text-sm text-purple-300 hover:text-white transition-colors mb-4 flex items-center gap-1"
+            >
+              ← 모니터 전체로 돌아가기
+            </button>
+            <h1 className="text-4xl sm:text-5xl font-bold text-white mb-3">{catLabel}</h1>
+            <p className="text-purple-300 text-lg">{filteredMonitors.length}개 제품</p>
+          </div>
+        </section>
+        <div className="bg-gradient-to-r from-purple-50 to-indigo-50 border-b border-purple-100">
+          <div className="max-w-[1400px] mx-auto px-4 sm:px-6 py-2 flex items-center justify-between text-xs">
+            <div className="flex items-center gap-2 text-purple-700">
+              {isFromApi ? (
+                <><Wifi className="w-3 h-3 text-green-500" /><span>실시간 데이터</span></>
+              ) : (
+                <><WifiOff className="w-3 h-3 text-amber-500" /><span>큐레이션 데이터</span></>
+              )}
+            </div>
+            <button onClick={refresh} className="flex items-center gap-1 text-purple-500 hover:text-purple-700 transition-colors">
+              <RefreshCw className={cn("w-3 h-3", isApiLoading && "animate-spin")} /><span>새로고침</span>
+            </button>
+          </div>
+        </div>
+        <section ref={productListRef} className="py-12 bg-slate-50">
+          <div className="max-w-[1400px] mx-auto px-4 sm:px-6">
+            {/* 정렬 */}
+            <div className="flex items-center justify-between mb-6">
+              <span className="text-sm text-slate-500">{filteredMonitors.length}개 제품</span>
+              <select
+                value={filters.sort}
+                onChange={e => setFilters(prev => ({ ...prev, sort: e.target.value as MonitorFilterState['sort'] }))}
+                className="text-sm border rounded-lg px-3 py-2"
+              >
+                {monitorSortOptions.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+              </select>
+            </div>
+            {/* 제품 카드 그리드 */}
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
+              {filteredMonitors.map((monitor) => {
+                const isWishlisted = wishlist.includes(monitor.id);
+                const isCompared = compareList.includes(monitor.id);
+                return (
+                  <Card key={monitor.id} className="overflow-hidden hover:shadow-lg transition-shadow">
+                    <div className="p-6">
+                      <div className="flex items-start justify-between mb-3">
+                        <div className="flex-1 min-w-0">
+                          <h3 className="font-semibold text-slate-900 truncate">{monitor.name}</h3>
+                          <p className="text-sm text-slate-500">{monitor.brand} · {monitor.specs.screenSize}" {monitor.specs.resolution}</p>
+                        </div>
+                        <div className="flex gap-1 ml-2">
+                          <button onClick={() => onToggleWishlist(monitor.id)} className={cn("p-1.5 rounded-full", isWishlisted ? "text-red-500" : "text-slate-300 hover:text-red-400")}>
+                            <Heart className="w-4 h-4" fill={isWishlisted ? 'currentColor' : 'none'} />
+                          </button>
+                          <button onClick={() => onToggleCompare(monitor.id)} className={cn("p-1.5 rounded-full", isCompared ? "text-blue-500" : "text-slate-300 hover:text-blue-400")}>
+                            <BarChart3 className="w-4 h-4" />
+                          </button>
+                          <button onClick={() => onSetPriceAlert(monitor.id)} className="p-1.5 rounded-full text-slate-300 hover:text-amber-400">
+                            <Bell className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </div>
+                      {monitor.images?.[0] && <img src={monitor.images[0]} alt={monitor.name} className="w-full h-40 object-contain mb-3 rounded" />}
+                      <div className="flex items-end gap-2 mb-3">
+                        <span className="text-2xl font-bold text-slate-900">{monitor.prices.current.toLocaleString()}원</span>
+                        {monitor.discount.percent > 0 && <Badge variant="destructive" className="text-xs">-{monitor.discount.percent}%</Badge>}
+                      </div>
+                      <div className="flex flex-wrap gap-1 mb-3">
+                        {monitor.tags.slice(0, 3).map(t => <Badge key={t} variant="secondary" className="text-xs">{t}</Badge>)}
+                      </div>
+                      <div className="flex gap-2">
+                        {monitor.affiliateUrls?.slice(0, 2).map((url: string, idx: number) => {
+                          const platform = getPlatformKey(url);
+                          return (
+                            <a key={idx} href={url} target="_blank" rel="noopener noreferrer"
+                              onClick={() => { if (isAffiliatePlatform(platform)) trackAffiliateClick(monitor.id, platform, 'product_card'); }}
+                              className="flex-1 text-center py-2 text-sm font-medium bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+                            >
+                              {isCoupangUrl(url) ? '쿠팡' : '최저가 보기'} <ExternalLink className="w-3 h-3 inline ml-1" />
+                            </a>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </Card>
+                );
+              })}
+            </div>
+          </div>
+        </section>
+      </>
+    );
+  }
+
+  // ─── 메인 모니터 페이지 (개요 모드) ───
   return (
     <>
       {/* Monitor Hero */}

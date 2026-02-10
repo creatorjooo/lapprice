@@ -149,11 +149,17 @@ export default function Navbar({
                   {hoveredType === type.hash && (
                     <div className="absolute top-full left-0 pt-1 w-40 z-50">
                       <div className="bg-white rounded-xl shadow-lg border border-slate-200 py-2">
+                        <button
+                          onClick={() => { onNavigateToPage(type.hash); setHoveredType(null); }}
+                          className="w-full text-left px-4 py-2 text-sm font-medium text-blue-600 hover:bg-blue-50 transition-colors"
+                        >
+                          전체 보기
+                        </button>
                         {type.subLinks.map((sub) => (
                           <button
                             key={sub.section}
                             onClick={() => {
-                              onNavigateToPage(type.hash);
+                              onNavigateToPage(`${type.hash}-${sub.section}`);
                               setHoveredType(null);
                             }}
                             className="w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition-colors"
@@ -232,7 +238,7 @@ export default function Navbar({
                             {type.subLinks.map((sub) => (
                               <button
                                 key={sub.section}
-                                onClick={() => { onNavigateToPage(type.hash); setIsMobileMenuOpen(false); }}
+                                onClick={() => { onNavigateToPage(`${type.hash}-${sub.section}`); setIsMobileMenuOpen(false); }}
                                 className="text-sm text-white/60 hover:text-white/90 transition-colors"
                               >
                                 {sub.name}
