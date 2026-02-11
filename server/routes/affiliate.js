@@ -1,21 +1,31 @@
 const express = require('express');
 const router = express.Router();
+
 const { getCachedResult, setCachedResult } = require('../utils/helpers');
 const { buildCoupangAuthorization } = require('../utils/coupangAuth');
+const { takeToken, setCooldownUntil } = require('../services/deeplinkRateLimiter');
 
-// Deeplink 전용 캐시 TTL (24시간 - 어필리에이트 링크는 자주 변하지 않음)
 const DEEPLINK_CACHE_TTL = parseInt(process.env.DEEPLINK_CACHE_TTL || '86400', 10);
-const DEEPLINK_FAIL_COOLDOWN_MS = parseInt(process.env.DEEPLINK_FAIL_COOLDOWN_MS || '900000', 10); // 15분
-const DEEPLINK_MAX_REQUESTS_PER_MIN = Math.max(1, parseInt(process.env.DEEPLINK_MAX_REQUESTS_PER_MIN || '45', 10) || 45);
-const DEEPLINK_LOCAL_COOLDOWN_MS = Math.max(15000, parseInt(process.env.DEEPLINK_LOCAL_COOLDOWN_MS || '60000', 10) || 60000);
-let deeplinkDisabledUntil = 0;
+const DEEPLINK_FAIL_COOLDOWN_MS = parseInt(process.env.DEEPLINK_FAIL_COOLDOWN_MS || '900000', 10);
+const DEEPLINK_LOCAL_COOLDOWN_MS = Math.max(
+  15000,
+  parseInt(process.env.DEEPLINK_LOCAL_COOLDOWN_MS || '60000', 10) || 60000,
+);
+
 let lastDeeplinkAuthLogAt = 0;
 let lastDeeplinkRateLogAt = 0;
-let deeplinkWindowStartedAt = Date.now();
-let deeplinkWindowCount = 0;
 
-function buildFallbackLinks(urls, warning = '', error = '') {
+function buildFallbackLinks(urls, options = {}) {
+  const {
+    mode,
+    warning = '',
+    error = '',
+    retryAt = null,
+  } = options;
+
   return {
+    mode,
+    retryAt: retryAt || undefined,
     warning: warning || undefined,
     error: error || undefined,
     links: urls.map((url) => ({
@@ -26,37 +36,32 @@ function buildFallbackLinks(urls, warning = '', error = '') {
   };
 }
 
-function reserveDeeplinkQuota() {
-  const now = Date.now();
-  if (now - deeplinkWindowStartedAt >= 60 * 1000) {
-    deeplinkWindowStartedAt = now;
-    deeplinkWindowCount = 0;
-  }
+function buildFallbackSingle(url, options = {}) {
+  const {
+    mode,
+    warning = '',
+    error = '',
+    retryAt = null,
+  } = options;
 
-  if (deeplinkWindowCount >= DEEPLINK_MAX_REQUESTS_PER_MIN) {
-    return false;
-  }
-
-  deeplinkWindowCount += 1;
-  return true;
+  return {
+    mode,
+    retryAt: retryAt || undefined,
+    warning: warning || undefined,
+    error: error || undefined,
+    originalUrl: url,
+    affiliateUrl: url,
+    shortenUrl: url,
+  };
 }
 
 function parseRetryUntilMsFromMessage(message) {
   const text = String(message || '');
   const match = text.match(/(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?)/);
   if (!match?.[1]) return 0;
-  const raw = match[1];
-  const normalized = raw.replace(/\.(\d{3})\d+$/, '.$1');
-  const parsed = Date.parse(normalized);
+  const raw = match[1].replace(/\.(\d{3})\d+$/, '.$1');
+  const parsed = Date.parse(raw) || Date.parse(`${raw}Z`);
   return Number.isFinite(parsed) ? parsed : 0;
-}
-
-function activateRateCooldown(message) {
-  const now = Date.now();
-  const parsedRetryUntil = parseRetryUntilMsFromMessage(message);
-  const fallbackUntil = now + DEEPLINK_LOCAL_COOLDOWN_MS;
-  const nextUntil = Math.max(fallbackUntil, parsedRetryUntil + 1000);
-  deeplinkDisabledUntil = Math.max(deeplinkDisabledUntil, nextUntil);
 }
 
 function isRateLimitError(message, status = 0) {
@@ -67,83 +72,108 @@ function isRateLimitError(message, status = 0) {
     || text.toLowerCase().includes('rate limit');
 }
 
+async function consumeDeeplinkQuota() {
+  const quota = await takeToken();
+  if (quota.allowed) {
+    return { blocked: false, mode: 'deeplink', retryAt: null };
+  }
+
+  return {
+    blocked: true,
+    mode: quota.reason === 'cooldown' ? 'fallback_cooldown' : 'fallback_rate_limited',
+    retryAt: quota.retryAt || undefined,
+  };
+}
+
+async function callCoupangDeeplinkApi(urls, subId) {
+  const apiPath = '/v2/providers/affiliate_open_api/apis/openapi/v1/deeplink';
+  const authorization = buildCoupangAuthorization({ method: 'POST', apiPath });
+  if (!authorization) {
+    throw Object.assign(new Error('쿠팡 파트너스 API 키 미설정'), { statusCode: 401, fallbackMode: 'fallback_no_key' });
+  }
+
+  const coupangUrls = urls.map((url) => {
+    if (subId && !url.includes('subId=')) {
+      const separator = url.includes('?') ? '&' : '?';
+      return `${url}${separator}subId=${encodeURIComponent(subId)}`;
+    }
+    return url;
+  });
+
+  const response = await fetch(`https://api-gateway.coupang.com${apiPath}`, {
+    method: 'POST',
+    headers: {
+      Authorization: authorization,
+      'Content-Type': 'application/json;charset=UTF-8',
+    },
+    body: JSON.stringify({ coupangUrls }),
+  });
+
+  if (!response.ok) {
+    const body = await response.text().catch(() => '');
+    const err = new Error(`쿠팡 Deeplink API 오류: ${response.status}${body ? ` - ${body.slice(0, 240)}` : ''}`);
+    err.statusCode = response.status;
+    throw err;
+  }
+
+  const data = await response.json();
+  return data?.data || [];
+}
+
+function logRateLimitOnce(message) {
+  if (Date.now() - lastDeeplinkRateLogAt <= 60000) return;
+  console.error('[Affiliate] Deeplink API rate limit 감지:', message.slice(0, 180));
+  lastDeeplinkRateLogAt = Date.now();
+}
+
+function logAuthErrorOnce() {
+  if (Date.now() - lastDeeplinkAuthLogAt <= 60000) return;
+  console.error('[Affiliate] Deeplink API 401 감지: 호출을 일시 중단합니다.', `cooldownMs=${DEEPLINK_FAIL_COOLDOWN_MS}`);
+  lastDeeplinkAuthLogAt = Date.now();
+}
+
 /**
  * 쿠팡 파트너스 Deeplink API
  * POST /api/affiliate/deeplink
  * Body: { "urls": ["https://www.coupang.com/..."], "subId": "lapprice_productcard" }
- * Response: { "links": [{ "originalUrl": "...", "affiliateUrl": "...", "shortenUrl": "..." }] }
  */
 router.post('/deeplink', async (req, res) => {
   const { urls, subId } = req.body;
-
   if (!urls || !Array.isArray(urls) || urls.length === 0) {
     return res.status(400).json({ error: 'URL 배열이 필요합니다.', links: [] });
   }
 
-  // 최대 50개 URL 제한 (API 제한 대응)
-  const limitedUrls = urls.slice(0, 50);
-
-  const now = Date.now();
-  if (now < deeplinkDisabledUntil) {
-    return res.json(buildFallbackLinks(limitedUrls, '쿠팡 Deeplink 일시 중단(쿨다운 중)'));
+  const limitedUrls = urls.slice(0, 50).map((url) => String(url || '').trim()).filter(Boolean);
+  if (limitedUrls.length === 0) {
+    return res.status(400).json({ error: '유효한 URL이 필요합니다.', links: [] });
   }
 
   if (!process.env.COUPANG_ACCESS_KEY || !process.env.COUPANG_SECRET_KEY) {
-    return res.json(buildFallbackLinks(limitedUrls, '', '쿠팡 파트너스 API 키 미설정'));
+    return res.json(buildFallbackLinks(limitedUrls, {
+      mode: 'fallback_no_key',
+      error: '쿠팡 파트너스 API 키 미설정',
+    }));
   }
 
-  // 캐시 확인 (URL 배열을 정렬하여 일관된 캐시 키 생성)
   const cacheKey = `deeplink:${[...limitedUrls].sort().join('|')}:${subId || ''}`;
   const cached = getCachedResult(cacheKey);
   if (cached) return res.json(cached);
 
-  if (!reserveDeeplinkQuota()) {
-    activateRateCooldown('local_rate_limit');
-    if (Date.now() - lastDeeplinkRateLogAt > 60000) {
-      console.error('[Affiliate] Deeplink 로컬 스로틀 발동:', `limit=${DEEPLINK_MAX_REQUESTS_PER_MIN}/min`);
-      lastDeeplinkRateLogAt = Date.now();
-    }
-    const fallback = buildFallbackLinks(limitedUrls, '쿠팡 Deeplink 호출이 많아 잠시 원본 링크로 대체됩니다.');
+  const quota = await consumeDeeplinkQuota();
+  if (quota.blocked) {
+    const fallback = buildFallbackLinks(limitedUrls, {
+      mode: quota.mode,
+      retryAt: quota.retryAt,
+      warning: quota.mode === 'fallback_cooldown'
+        ? '쿠팡 Deeplink 일시 중단(쿨다운 중)'
+        : '쿠팡 Deeplink 호출이 많아 잠시 원본 링크로 대체됩니다.',
+    });
     setCachedResult(cacheKey, fallback, 60);
     return res.json(fallback);
   }
 
   try {
-    const apiPath = '/v2/providers/affiliate_open_api/apis/openapi/v1/deeplink';
-    const authorization = buildCoupangAuthorization({ method: 'POST', apiPath });
-    if (!authorization) {
-      const fallback = buildFallbackLinks(limitedUrls, '', '쿠팡 파트너스 API 키 미설정');
-      setCachedResult(cacheKey, fallback, 300);
-      return res.json(fallback);
-    }
-
-    // subId가 있으면 URL에 추가
-    const coupangUrls = limitedUrls.map((url) => {
-      if (subId && !url.includes('subId=')) {
-        const separator = url.includes('?') ? '&' : '?';
-        return `${url}${separator}subId=${encodeURIComponent(subId)}`;
-      }
-      return url;
-    });
-
-    const apiUrl = `https://api-gateway.coupang.com${apiPath}`;
-    const response = await fetch(apiUrl, {
-      method: 'POST',
-      headers: {
-        'Authorization': authorization,
-        'Content-Type': 'application/json;charset=UTF-8',
-      },
-      body: JSON.stringify({ coupangUrls }),
-    });
-
-    if (!response.ok) {
-      const body = await response.text().catch(() => '');
-      throw new Error(`쿠팡 Deeplink API 오류: ${response.status}${body ? ` - ${body.slice(0, 240)}` : ''}`);
-    }
-
-    const data = await response.json();
-    const deeplinkData = data?.data || [];
-
+    const deeplinkData = await callCoupangDeeplinkApi(limitedUrls, subId);
     const links = limitedUrls.map((originalUrl, index) => {
       const deeplink = deeplinkData[index];
       return {
@@ -153,30 +183,47 @@ router.post('/deeplink', async (req, res) => {
       };
     });
 
-    const result = { links };
+    const result = { mode: 'deeplink', links };
     setCachedResult(cacheKey, result, DEEPLINK_CACHE_TTL);
-    res.json(result);
+    return res.json(result);
   } catch (err) {
     const msg = (err && err.message) ? err.message : 'unknown error';
-    if (msg.includes('401')) {
-      deeplinkDisabledUntil = Date.now() + DEEPLINK_FAIL_COOLDOWN_MS;
-      if (Date.now() - lastDeeplinkAuthLogAt > 60000) {
-        console.error('[Affiliate] Deeplink API 401 감지: 호출을 일시 중단합니다.', `cooldownMs=${DEEPLINK_FAIL_COOLDOWN_MS}`);
-        lastDeeplinkAuthLogAt = Date.now();
-      }
-    } else if (isRateLimitError(msg)) {
-      activateRateCooldown(msg);
-      if (Date.now() - lastDeeplinkRateLogAt > 60000) {
-        console.error('[Affiliate] Deeplink API rate limit 감지: 쿨다운 적용', msg.slice(0, 180));
-        lastDeeplinkRateLogAt = Date.now();
-      }
-    } else {
-      console.error('[Affiliate] Deeplink API 오류:', msg);
+    const statusCode = Number(err?.statusCode || 0);
+
+    if (statusCode === 401 || msg.includes('401')) {
+      const retryAtIso = await setCooldownUntil(Date.now() + DEEPLINK_FAIL_COOLDOWN_MS);
+      logAuthErrorOnce();
+      const fallback = buildFallbackLinks(limitedUrls, {
+        mode: 'fallback_no_key',
+        retryAt: retryAtIso,
+        error: msg,
+      });
+      setCachedResult(cacheKey, fallback, 300);
+      return res.json(fallback);
     }
-    // 실패 시 원본 URL 반환 (서비스 중단 방지)
-    const fallback = buildFallbackLinks(limitedUrls, '', msg);
+
+    if (isRateLimitError(msg, statusCode)) {
+      const parsedRetryAtMs = parseRetryUntilMsFromMessage(msg);
+      const cooldownUntilMs = Math.max(Date.now() + DEEPLINK_LOCAL_COOLDOWN_MS, parsedRetryAtMs + 1000);
+      const retryAtIso = await setCooldownUntil(cooldownUntilMs);
+      logRateLimitOnce(msg);
+      const fallback = buildFallbackLinks(limitedUrls, {
+        mode: 'fallback_rate_limited',
+        retryAt: retryAtIso,
+        warning: '쿠팡 Deeplink 호출이 많아 잠시 원본 링크로 대체됩니다.',
+        error: msg,
+      });
+      setCachedResult(cacheKey, fallback, 120);
+      return res.json(fallback);
+    }
+
+    console.error('[Affiliate] Deeplink API 오류:', msg);
+    const fallback = buildFallbackLinks(limitedUrls, {
+      mode: 'fallback_no_key',
+      error: msg,
+    });
     setCachedResult(cacheKey, fallback, 120);
-    res.json(fallback);
+    return res.json(fallback);
   }
 });
 
@@ -186,104 +233,92 @@ router.post('/deeplink', async (req, res) => {
  */
 router.get('/convert', async (req, res) => {
   const { url, subId } = req.query;
-
-  if (!url) {
+  const targetUrl = String(url || '').trim();
+  if (!targetUrl) {
     return res.status(400).json({ error: 'URL이 필요합니다.' });
   }
 
-  if (Date.now() < deeplinkDisabledUntil) {
+  if (!targetUrl.includes('coupang.com')) {
     return res.json({
-      originalUrl: url,
-      affiliateUrl: url,
-      shortenUrl: url,
-      warning: '쿠팡 Deeplink 일시 중단(쿨다운 중)',
+      mode: 'deeplink',
+      originalUrl: targetUrl,
+      affiliateUrl: targetUrl,
+      shortenUrl: targetUrl,
     });
   }
 
-  // 쿠팡 URL이 아닌 경우 그대로 반환
-  if (!url.includes('coupang.com')) {
-    return res.json({ originalUrl: url, affiliateUrl: url, shortenUrl: url });
-  }
-
-  const cacheKey = `deeplink:single:${url}:${subId || ''}`;
+  const cacheKey = `deeplink:single:${targetUrl}:${subId || ''}`;
   const cached = getCachedResult(cacheKey);
   if (cached) return res.json(cached);
 
-  if (!reserveDeeplinkQuota()) {
-    activateRateCooldown('local_rate_limit');
-    if (Date.now() - lastDeeplinkRateLogAt > 60000) {
-      console.error('[Affiliate] Deeplink single 로컬 스로틀 발동:', `limit=${DEEPLINK_MAX_REQUESTS_PER_MIN}/min`);
-      lastDeeplinkRateLogAt = Date.now();
-    }
-    const fallback = {
-      originalUrl: url,
-      affiliateUrl: url,
-      shortenUrl: url,
-      warning: '쿠팡 Deeplink 호출이 많아 잠시 원본 링크로 대체됩니다.',
-    };
+  if (!process.env.COUPANG_ACCESS_KEY || !process.env.COUPANG_SECRET_KEY) {
+    const fallback = buildFallbackSingle(targetUrl, { mode: 'fallback_no_key' });
+    setCachedResult(cacheKey, fallback, 300);
+    return res.json(fallback);
+  }
+
+  const quota = await consumeDeeplinkQuota();
+  if (quota.blocked) {
+    const fallback = buildFallbackSingle(targetUrl, {
+      mode: quota.mode,
+      retryAt: quota.retryAt,
+      warning: quota.mode === 'fallback_cooldown'
+        ? '쿠팡 Deeplink 일시 중단(쿨다운 중)'
+        : '쿠팡 Deeplink 호출이 많아 잠시 원본 링크로 대체됩니다.',
+    });
     setCachedResult(cacheKey, fallback, 60);
     return res.json(fallback);
   }
 
-  if (!process.env.COUPANG_ACCESS_KEY || !process.env.COUPANG_SECRET_KEY) {
-    return res.json({ originalUrl: url, affiliateUrl: url, shortenUrl: url });
-  }
-
   try {
-    const apiPath = '/v2/providers/affiliate_open_api/apis/openapi/v1/deeplink';
-    const authorization = buildCoupangAuthorization({ method: 'POST', apiPath });
-    if (!authorization) {
-      return res.json({ originalUrl: url, affiliateUrl: url, shortenUrl: url });
-    }
-
-    const targetUrl = subId && !url.includes('subId=')
-      ? `${url}${url.includes('?') ? '&' : '?'}subId=${encodeURIComponent(subId)}`
-      : url;
-
-    const apiUrl = `https://api-gateway.coupang.com${apiPath}`;
-    const response = await fetch(apiUrl, {
-      method: 'POST',
-      headers: {
-        'Authorization': authorization,
-        'Content-Type': 'application/json;charset=UTF-8',
-      },
-      body: JSON.stringify({ coupangUrls: [targetUrl] }),
-    });
-
-    if (!response.ok) {
-      const body = await response.text().catch(() => '');
-      throw new Error(`API 오류: ${response.status}${body ? ` - ${body.slice(0, 240)}` : ''}`);
-    }
-
-    const data = await response.json();
-    const deeplink = data?.data?.[0];
-
+    const deeplinkData = await callCoupangDeeplinkApi([targetUrl], subId);
+    const deeplink = deeplinkData[0];
     const result = {
-      originalUrl: url,
-      affiliateUrl: deeplink?.landingUrl || url,
-      shortenUrl: deeplink?.shortenUrl || deeplink?.landingUrl || url,
+      mode: 'deeplink',
+      originalUrl: targetUrl,
+      affiliateUrl: deeplink?.landingUrl || targetUrl,
+      shortenUrl: deeplink?.shortenUrl || deeplink?.landingUrl || targetUrl,
     };
 
     setCachedResult(cacheKey, result, DEEPLINK_CACHE_TTL);
-    res.json(result);
+    return res.json(result);
   } catch (err) {
     const msg = (err && err.message) ? err.message : 'unknown error';
-    if (msg.includes('401')) {
-      deeplinkDisabledUntil = Date.now() + DEEPLINK_FAIL_COOLDOWN_MS;
-      if (Date.now() - lastDeeplinkAuthLogAt > 60000) {
-        console.error('[Affiliate] Deeplink API 401 감지: 호출을 일시 중단합니다.', `cooldownMs=${DEEPLINK_FAIL_COOLDOWN_MS}`);
-        lastDeeplinkAuthLogAt = Date.now();
-      }
-    } else if (isRateLimitError(msg)) {
-      activateRateCooldown(msg);
-      if (Date.now() - lastDeeplinkRateLogAt > 60000) {
-        console.error('[Affiliate] Deeplink API rate limit 감지(single): 쿨다운 적용', msg.slice(0, 180));
-        lastDeeplinkRateLogAt = Date.now();
-      }
+    const statusCode = Number(err?.statusCode || 0);
+
+    if (statusCode === 401 || msg.includes('401')) {
+      const retryAtIso = await setCooldownUntil(Date.now() + DEEPLINK_FAIL_COOLDOWN_MS);
+      logAuthErrorOnce();
+      const fallback = buildFallbackSingle(targetUrl, {
+        mode: 'fallback_no_key',
+        retryAt: retryAtIso,
+        error: msg,
+      });
+      setCachedResult(cacheKey, fallback, 300);
+      return res.json(fallback);
     }
-    const fallback = { originalUrl: url, affiliateUrl: url, shortenUrl: url, error: msg };
+
+    if (isRateLimitError(msg, statusCode)) {
+      const parsedRetryAtMs = parseRetryUntilMsFromMessage(msg);
+      const cooldownUntilMs = Math.max(Date.now() + DEEPLINK_LOCAL_COOLDOWN_MS, parsedRetryAtMs + 1000);
+      const retryAtIso = await setCooldownUntil(cooldownUntilMs);
+      logRateLimitOnce(`${msg} (single)`);
+      const fallback = buildFallbackSingle(targetUrl, {
+        mode: 'fallback_rate_limited',
+        retryAt: retryAtIso,
+        warning: '쿠팡 Deeplink 호출이 많아 잠시 원본 링크로 대체됩니다.',
+        error: msg,
+      });
+      setCachedResult(cacheKey, fallback, 120);
+      return res.json(fallback);
+    }
+
+    const fallback = buildFallbackSingle(targetUrl, {
+      mode: 'fallback_no_key',
+      error: msg,
+    });
     setCachedResult(cacheKey, fallback, 120);
-    res.json(fallback);
+    return res.json(fallback);
   }
 });
 

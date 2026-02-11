@@ -36,9 +36,13 @@ services:
       - key: DEEPLINK_CACHE_TTL
         value: "86400"
       - key: DEEPLINK_MAX_REQUESTS_PER_MIN
-        value: "45"
+        value: "42"
       - key: DEEPLINK_LOCAL_COOLDOWN_MS
         value: "60000"
+      - key: REDIS_URL
+        sync: false
+      - key: REDIS_PREFIX
+        value: lapprice
       - key: VITE_AFFILIATE_PREFETCH
         value: "false"
       # 관리자
