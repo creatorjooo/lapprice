@@ -35,6 +35,12 @@ services:
         value: lapprice
       - key: DEEPLINK_CACHE_TTL
         value: "86400"
+      - key: DEEPLINK_MAX_REQUESTS_PER_MIN
+        value: "45"
+      - key: DEEPLINK_LOCAL_COOLDOWN_MS
+        value: "60000"
+      - key: VITE_AFFILIATE_PREFETCH
+        value: "false"
       # 관리자
       - key: ADMIN_PASSWORD
         sync: false
@@ -70,6 +76,8 @@ services:
         value: "120"
       - key: NAVER_FETCH_TIMEOUT_MS
         value: "12000"
+      - key: COUPANG_SEARCH_DEEPLINK_ENABLED
+        value: "false"
       # 전 플랫폼 스토어 확장
       - key: ENABLE_ALL_PLATFORM_ENRICH
         value: "true"

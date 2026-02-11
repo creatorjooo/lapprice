@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { getCachedResult, setCachedResult } = require('../utils/helpers');
 const { buildCoupangAuthorization } = require('../utils/coupangAuth');
+const ENABLE_SEARCH_DEEPLINK = process.env.COUPANG_SEARCH_DEEPLINK_ENABLED === 'true';
 
 /**
  * 쿠팡 URL 배열을 어필리에이트 Deeplink로 변환
@@ -94,13 +95,12 @@ router.get('/', async (req, res) => {
     const data = await response.json();
     const productData = data?.data?.productData || [];
 
-    // 상품 URL 배열 추출 후 Deeplink 변환
+    // 검색 단계에서 Deeplink 변환은 API 호출량이 매우 커지므로 기본 비활성
     const productUrls = productData.map((item) => item.productUrl || '');
     const subIdPrefix = process.env.COUPANG_AFFILIATE_SUBID_PREFIX || 'lapprice';
-    const affiliateUrls = await convertToDeeplinks(
-      productUrls.filter(Boolean),
-      `${subIdPrefix}_search`
-    );
+    const affiliateUrls = ENABLE_SEARCH_DEEPLINK
+      ? await convertToDeeplinks(productUrls.filter(Boolean), `${subIdPrefix}_search`)
+      : productUrls.filter(Boolean);
 
     // URL 인덱스 매핑
     let affiliateIdx = 0;

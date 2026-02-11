@@ -13,6 +13,7 @@ interface AffiliateLinkCache {
 // 모듈 레벨 캐시 (컴포넌트 리렌더 간 유지)
 const globalCache: AffiliateLinkCache = {};
 const pendingRequests = new Map<string, Promise<string>>();
+const AFFILIATE_PREFETCH_ENABLED = import.meta.env.VITE_AFFILIATE_PREFETCH === 'true';
 
 /**
  * 쿠팡 URL인지 확인
@@ -109,6 +110,12 @@ export function useAffiliateLink(url: string, subId: string = 'lapprice') {
   const [isLoading, setIsLoading] = useState(false);
 
   useEffect(() => {
+    if (!AFFILIATE_PREFETCH_ENABLED) {
+      setAffiliateUrl(url);
+      setIsLoading(false);
+      return;
+    }
+
     if (!url || !isCoupangUrl(url)) {
       setAffiliateUrl(url);
       return;
@@ -141,6 +148,13 @@ export function useAffiliateBatch(urls: string[], subId: string = 'lapprice') {
   const prevUrlsRef = useRef<string>('');
 
   useEffect(() => {
+    if (!AFFILIATE_PREFETCH_ENABLED) {
+      setAffiliateUrls(urls);
+      setIsLoading(false);
+      prevUrlsRef.current = urls.join('|');
+      return;
+    }
+
     const urlsKey = urls.join('|');
     if (urlsKey === prevUrlsRef.current) return;
     prevUrlsRef.current = urlsKey;
