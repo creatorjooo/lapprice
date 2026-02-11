@@ -306,6 +306,7 @@ const normalizeProductsForUi = (productType: ProductType, products: Product[]): 
 interface ProductsResponse {
   type: string;
   storeVisibility?: 'all' | 'verified';
+  priceMode?: 'strict' | 'legacy';
   total: number;
   verifiedOnly?: boolean;
   lastSync: string | null;
@@ -423,6 +424,7 @@ export function useProducts<T extends Product = Product>(
         const params = new URLSearchParams({ type: productType, limit: '200' });
         if (category) params.set('category', category);
         params.set('storeVisibility', resolvedStoreVisibility);
+        params.set('priceMode', 'strict');
         if (typeof verifiedOnly === 'boolean') {
           params.set('verifiedOnly', String(verifiedOnly));
         }

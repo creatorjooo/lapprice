@@ -52,10 +52,24 @@ services:
         value: "360"
       - key: VERIFICATION_TIMEOUT_MS
         value: "6500"
+      - key: STRICT_PRICE_GUARD
+        value: "true"
+      - key: ALLOW_DEGRADED_REDIRECT
+        value: "false"
+      - key: DISPLAY_PRICE_FRESH_MINUTES
+        value: "360"
+      - key: LISTING_PRICE_TTL_SEC
+        value: "300"
+      - key: CLICK_VERIFY_TIMEOUT_MS
+        value: "2500"
+      - key: PRICE_TOKEN_SECRET
+        sync: false
       - key: NAVER_VERIFY_MIN_INTERVAL_MS
         value: "120"
       - key: COUPANG_VERIFY_MIN_INTERVAL_MS
         value: "120"
+      - key: NAVER_FETCH_TIMEOUT_MS
+        value: "12000"
       # 전 플랫폼 스토어 확장
       - key: ENABLE_ALL_PLATFORM_ENRICH
         value: "true"

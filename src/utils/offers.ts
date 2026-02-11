@@ -8,13 +8,27 @@ export function getStoreTrackingUrl(store: StorePrice): string {
   return store.sourceUrl || store.url || '';
 }
 
+export function getStoreDisplayPrice(store: StorePrice): number | null {
+  const display = Number(store.displayPrice);
+  if (Number.isFinite(display) && display > 0) return Math.round(display);
+  return null;
+}
+
+export function getStoreSortPrice(store: StorePrice): number {
+  const displayPrice = getStoreDisplayPrice(store);
+  return displayPrice !== null ? displayPrice : Number.MAX_SAFE_INTEGER;
+}
+
 export function getStoreVerifiedPrice(store: StorePrice): number {
-  const candidate = Number(store.verifiedPrice);
-  if (Number.isFinite(candidate) && candidate > 0) return Math.round(candidate);
-  const price = Number(store.price);
-  return Number.isFinite(price) && price > 0 ? Math.round(price) : 0;
+  const displayPrice = getStoreDisplayPrice(store);
+  if (displayPrice !== null) return displayPrice;
+  return 0;
 }
 
 export function isStoreVerified(store: StorePrice): boolean {
-  return store.verificationStatus === 'verified';
+  return store.priceState === 'verified_fresh' || store.verificationStatus === 'verified';
+}
+
+export function canShowStorePrice(store: StorePrice): boolean {
+  return getStoreDisplayPrice(store) !== null;
 }

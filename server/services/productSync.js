@@ -13,7 +13,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { stripHtml, delay } = require('../utils/helpers');
+const { stripHtml, delay, withTimeout } = require('../utils/helpers');
 const { cacheImageFromUrl, isImageCacheEnabled } = require('./imageCache');
 
 const AFFILIATE_LINKS_PATH = path.join(__dirname, '..', 'config', 'affiliate-links.json');
@@ -39,6 +39,7 @@ const PLATFORM_ENRICH_RESULT_LIMIT = Math.max(5, Math.min(30, parseInt(process.e
 const PLATFORM_MATCH_SCORE_THRESHOLD = Math.max(0, Math.min(100, parseInt(process.env.PLATFORM_MATCH_SCORE_THRESHOLD || '58', 10) || 58));
 const PLATFORM_STORES_PER_SOURCE = Math.max(1, Math.min(3, parseInt(process.env.PLATFORM_STORES_PER_SOURCE || '2', 10) || 2));
 const PLATFORM_ENRICH_CONCURRENCY = Math.max(1, Math.min(8, parseInt(process.env.PLATFORM_ENRICH_CONCURRENCY || '3', 10) || 3));
+const NAVER_FETCH_TIMEOUT_MS = Math.max(3000, parseInt(process.env.NAVER_FETCH_TIMEOUT_MS || '12000', 10) || 12000);
 
 // 카테고리별 검색 키워드 (네이버 쇼핑 API용)
 const SEARCH_QUERIES = {
@@ -535,12 +536,12 @@ async function fetchFromNaver(query, display = 20) {
 
   try {
     const url = `https://openapi.naver.com/v1/search/shop.json?query=${encodeURIComponent(query)}&display=${display}&sort=sim`;
-    const response = await fetch(url, {
+    const response = await withTimeout(fetch(url, {
       headers: {
         'X-Naver-Client-Id': clientId,
         'X-Naver-Client-Secret': clientSecret,
       },
-    });
+    }), NAVER_FETCH_TIMEOUT_MS);
 
     if (!response.ok) {
       console.error(`[ProductSync] 네이버 API 오류: ${response.status} for "${query}"`);

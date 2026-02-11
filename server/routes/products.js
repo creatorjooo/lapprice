@@ -1,7 +1,14 @@
 const express = require('express');
 const router = express.Router();
 const { getPriceHistory, syncAll, syncProductType, healAllImages, searchProductImage } = require('../services/productSync');
-const { prepareCatalogForResponse, verifyAllOffers, isVerifiedOnlyMode } = require('../services/offerVerification');
+const {
+  prepareCatalogForResponse,
+  verifyAllOffers,
+  isVerifiedOnlyMode,
+  isStrictPriceGuardEnabled,
+  getListingPriceTtlSec,
+  getDisplayPriceFreshMinutes,
+} = require('../services/offerVerification');
 
 function parseBoolean(value, fallback) {
   if (value === undefined || value === null || value === '') return fallback;
@@ -37,6 +44,13 @@ function buildCoverage(products) {
   return { avgStoresPerProduct, platformCoverage };
 }
 
+function normalizePriceMode(value, fallback = 'strict') {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (normalized === 'strict') return 'strict';
+  if (normalized === 'legacy') return 'legacy';
+  return fallback;
+}
+
 /**
  * GET /api/products
  * 자동 수집된 상품 목록 반환
@@ -51,6 +65,7 @@ function buildCoverage(products) {
  *   limit: 최대 개수 (선택, 기본값 100)
  *   offset: 건너뛸 개수 (선택, 기본값 0)
  *   storeVisibility: 'all' | 'verified' (선택, 기본값 all)
+ *   priceMode: 'strict' | 'legacy' (선택, 기본값 strict)
  *   verifiedOnly: 레거시 호환 파라미터 (선택)
  */
 router.get('/', (req, res) => {
@@ -65,6 +80,7 @@ router.get('/', (req, res) => {
     offset = '0',
     q,
     storeVisibility,
+    priceMode,
     verifiedOnly,
   } = req.query;
 
@@ -76,8 +92,13 @@ router.get('/', (req, res) => {
   const visibility = verifiedOnly !== undefined
     ? (parseBoolean(verifiedOnly, false) ? 'verified' : 'all')
     : normalizeStoreVisibility(storeVisibility, fallbackVisibility);
+  const resolvedPriceMode = normalizePriceMode(priceMode, 'strict');
 
-  const catalog = prepareCatalogForResponse(type, { storeVisibility: visibility });
+  const catalog = prepareCatalogForResponse(type, {
+    storeVisibility: visibility,
+    priceMode: resolvedPriceMode,
+    strictGuard: isStrictPriceGuardEnabled(),
+  });
   let products = catalog.products || [];
 
   // 검색어 필터
@@ -142,6 +163,7 @@ router.get('/', (req, res) => {
   res.json({
     type,
     storeVisibility: visibility,
+    priceMode: resolvedPriceMode,
     verifiedOnly: verifiedOnlyMode,
     total: products.length,
     offset: offsetNum,
@@ -149,6 +171,13 @@ router.get('/', (req, res) => {
     lastSync: catalog.lastSync,
     syncCount: catalog.syncCount,
     stats: catalog.stats,
+    meta: {
+      priceMode: resolvedPriceMode,
+      listingPriceTtlSec: getListingPriceTtlSec(),
+      displayPriceFreshMinutes: getDisplayPriceFreshMinutes(),
+      generatedAt: catalog.generatedAt || new Date().toISOString(),
+      strictGuard: isStrictPriceGuardEnabled(),
+    },
     coverage,
     products: paginatedProducts,
   });

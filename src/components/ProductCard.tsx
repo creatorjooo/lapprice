@@ -40,7 +40,15 @@ import { useAffiliateBatch, isCoupangUrl } from '@/hooks/useAffiliateLink';
 import { useVerifiedRedirect } from '@/hooks/useVerifiedRedirect';
 import { trackAffiliateClick, getPlatformKey, isAffiliatePlatform } from '@/utils/tracking';
 import { formatStoreUpdatedAt } from '@/utils/time';
-import { getStoreHref, getStoreTrackingUrl, getStoreVerifiedPrice, isStoreVerified } from '@/utils/offers';
+import {
+  canShowStorePrice,
+  getStoreDisplayPrice,
+  getStoreHref,
+  getStoreSortPrice,
+  getStoreTrackingUrl,
+  getStoreVerifiedPrice,
+  isStoreVerified,
+} from '@/utils/offers';
 import ProductImage from '@/components/ProductImage';
 import PriceHistoryChart from '@/components/PriceHistoryChart';
 import { usePriceHistory } from '@/hooks/useProducts';
@@ -69,15 +77,21 @@ export default function ProductCard({
   const staticPriceHistory = priceHistoryData[laptop.id] || [];
   const { history: apiPriceHistory } = usePriceHistory(showPriceHistory ? laptop.id : null);
   const priceHistory = apiPriceHistory.length > 0 ? apiPriceHistory : staticPriceHistory;
-  const savingsAmount = laptop.prices.original - laptop.prices.current;
-  const savingsPercent = Math.round((savingsAmount / laptop.prices.original) * 100);
-  const isPriceGood = laptop.priceIndex >= 80;
+  const hasCurrentPrice = laptop.prices.current > 0;
+  const savingsAmount = hasCurrentPrice ? (laptop.prices.original - laptop.prices.current) : 0;
+  const savingsPercent = hasCurrentPrice && laptop.prices.original > 0
+    ? Math.round((savingsAmount / laptop.prices.original) * 100)
+    : 0;
+  const isPriceGood = hasCurrentPrice && laptop.priceIndex >= 80;
 
   // 구매 타이밍 어드바이저
   const priceTiming = useMemo(() => {
     const current = laptop.prices.current;
     const lowest = laptop.prices.lowest;
     const average = laptop.prices.average;
+    if (current <= 0 || lowest <= 0 || average <= 0) {
+      return { label: '가격 확인 필요', sublabel: '클릭 시 최신가를 확인합니다.', color: 'bg-slate-100 text-slate-600 dark:bg-slate-900/40 dark:text-slate-300', icon: '🔎' };
+    }
     const diffFromLowest = ((current - lowest) / lowest) * 100;
     const diffFromAverage = ((average - current) / average) * 100;
 
@@ -90,15 +104,15 @@ export default function ProductCard({
 
   // 전체 스토어 노출 (가격 오름차순)
   const sortedStores = useMemo(() => {
-    return [...laptop.stores].sort((a, b) => getStoreVerifiedPrice(a) - getStoreVerifiedPrice(b));
+    return [...laptop.stores].sort((a, b) => getStoreSortPrice(a) - getStoreSortPrice(b));
   }, [laptop.stores]);
 
   // 원본 URL 배열에서 쿠팡 URL만 어필리에이트 변환
   const storeUrls = useMemo(() => sortedStores.map((s) => getStoreTrackingUrl(s)), [sortedStores]);
   const { affiliateUrls } = useAffiliateBatch(storeUrls, `lapprice_product_${laptop.id}`);
 
-  // CTA 대상: 전체 스토어 최저가 (정확한 최저가 우선)
-  const ctaStore = sortedStores[0];
+  // CTA 대상: 표시 가능한 가격이 있는 스토어 최저가
+  const ctaStore = sortedStores.find((store) => canShowStorePrice(store));
 
   const ctaStoreIndex = ctaStore ? sortedStores.indexOf(ctaStore) : -1;
   const ctaHref = useMemo(() => {
@@ -110,7 +124,12 @@ export default function ProductCard({
 
   const ctaTrackingUrl = ctaStore ? getStoreTrackingUrl(ctaStore) : '';
   const absoluteLowestPrice = useMemo(
-    () => (sortedStores.length > 0 ? Math.min(...sortedStores.map((s) => getStoreVerifiedPrice(s))) : 0),
+    () => {
+      const prices = sortedStores
+        .map((store) => getStoreDisplayPrice(store))
+        .filter((price): price is number => price !== null && price > 0);
+      return prices.length > 0 ? Math.min(...prices) : 0;
+    },
     [sortedStores]
   );
 
@@ -283,7 +302,7 @@ export default function ProductCard({
           <div className="mb-2 mt-auto">
             <div className="flex items-baseline gap-1.5 mb-0.5 flex-wrap">
               <span className="text-lg font-bold text-slate-900 dark:text-white">
-                {laptop.prices.current.toLocaleString()}원
+                {hasCurrentPrice ? `${laptop.prices.current.toLocaleString()}원` : '가격 확인 필요'}
               </span>
               {savingsPercent > 0 && (
                 <span className="text-xs text-slate-400 line-through">
@@ -298,22 +317,26 @@ export default function ProductCard({
                   {savingsPercent}% 할인
                 </span>
               )}
-              <span className="text-slate-500">
-                평균대비 {' '}
-                {laptop.prices.current < laptop.prices.average ? (
-                  <span className="text-emerald-600 dark:text-emerald-400">
-                    -{Math.round(((laptop.prices.average - laptop.prices.current) / laptop.prices.average) * 100)}%
-                  </span>
-                ) : (
-                  <span className="text-rose-600 dark:text-rose-400">
-                    +{Math.round(((laptop.prices.current - laptop.prices.average) / laptop.prices.average) * 100)}%
-                  </span>
-                )}
-              </span>
+              {hasCurrentPrice && laptop.prices.average > 0 && (
+                <span className="text-slate-500">
+                  평균대비 {' '}
+                  {laptop.prices.current < laptop.prices.average ? (
+                    <span className="text-emerald-600 dark:text-emerald-400">
+                      -{Math.round(((laptop.prices.average - laptop.prices.current) / laptop.prices.average) * 100)}%
+                    </span>
+                  ) : (
+                    <span className="text-rose-600 dark:text-rose-400">
+                      +{Math.round(((laptop.prices.current - laptop.prices.average) / laptop.prices.average) * 100)}%
+                    </span>
+                  )}
+                </span>
+              )}
             </div>
-            <p className="text-[10px] text-slate-400 mt-0.5">
-              역대최저 {laptop.prices.lowest.toLocaleString()}원
-            </p>
+            {laptop.prices.lowest > 0 && (
+              <p className="text-[10px] text-slate-400 mt-0.5">
+                역대최저 {laptop.prices.lowest.toLocaleString()}원
+              </p>
+            )}
           </div>
 
           {/* 구매 타이밍 어드바이저 */}
@@ -342,7 +365,7 @@ export default function ProductCard({
           )}
 
           {/* CTA 버튼 - 검증 후 최저가 이동 */}
-          {ctaStore && (
+          {ctaStore && getStoreVerifiedPrice(ctaStore) > 0 && (
             <button
               type="button"
               onClick={async () => {
@@ -399,7 +422,7 @@ export default function ProductCard({
                     <div>
                       <div className="flex items-center gap-1">
                         <p className="text-xs font-medium">{store.store}</p>
-                        {storePrice === absoluteLowestPrice && (
+                        {storePrice > 0 && storePrice === absoluteLowestPrice && (
                           <Badge className="bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 text-[8px] px-1 py-0 h-3.5 font-normal">
                             최저가
                           </Badge>
@@ -422,8 +445,8 @@ export default function ProductCard({
                     </div>
                   </div>
                   <div className="text-right">
-                    <p className="text-xs font-bold">{storePrice.toLocaleString()}원</p>
-                    {storePrice > absoluteLowestPrice && (
+                    <p className="text-xs font-bold">{storePrice > 0 ? `${storePrice.toLocaleString()}원` : '가격 확인 필요'}</p>
+                    {storePrice > 0 && storePrice > absoluteLowestPrice && (
                       <p className="text-[10px] text-slate-400">+{(storePrice - absoluteLowestPrice).toLocaleString()}원</p>
                     )}
                     <p className="text-[10px] text-slate-400 flex items-center gap-0.5 justify-end">

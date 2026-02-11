@@ -18,7 +18,15 @@ import { usePriceHistory, useProducts } from '@/hooks/useProducts';
 import { useAffiliateBatch, isCoupangUrl } from '@/hooks/useAffiliateLink';
 import { useVerifiedRedirect } from '@/hooks/useVerifiedRedirect';
 import { trackAffiliateClick, getPlatformKey, isAffiliatePlatform } from '@/utils/tracking';
-import { getStoreHref, getStoreTrackingUrl, getStoreVerifiedPrice, isStoreVerified } from '@/utils/offers';
+import {
+  canShowStorePrice,
+  getStoreDisplayPrice,
+  getStoreHref,
+  getStoreSortPrice,
+  getStoreTrackingUrl,
+  getStoreVerifiedPrice,
+  isStoreVerified,
+} from '@/utils/offers';
 import { cn } from '@/lib/utils';
 import { formatStoreUpdatedAt } from '@/utils/time';
 import type { Monitor, MonitorFilterState, PriceHistory } from '@/types';
@@ -48,6 +56,7 @@ export default function MonitorPage({
   onNavigateToPage,
 }: MonitorPageProps) {
   const productListRef = useRef<HTMLDivElement>(null);
+  const { openVerifiedLink: openVerifiedLinkInPage } = useVerifiedRedirect();
 
   // API 자동 데이터 + 정적 데이터 fallback
   const { products: apiMonitors, isLoading: isApiLoading, isFromApi, lastSync, refresh } = useProducts<Monitor>('monitor');
@@ -257,7 +266,9 @@ export default function MonitorPage({
                         fallbackText={monitor.name}
                       />
                       <div className="flex items-end gap-2 mb-3">
-                        <span className="text-2xl font-bold text-slate-900">{monitor.prices.current.toLocaleString()}원</span>
+                        <span className="text-2xl font-bold text-slate-900">
+                          {monitor.prices.current > 0 ? `${monitor.prices.current.toLocaleString()}원` : '가격 확인 필요'}
+                        </span>
                         {monitor.discount.percent > 0 && <Badge variant="destructive" className="text-xs">-{monitor.discount.percent}%</Badge>}
                       </div>
                       <div className="flex flex-wrap gap-1 mb-3">
@@ -269,12 +280,19 @@ export default function MonitorPage({
                           const trackingUrl = getStoreTrackingUrl(store) || href;
                           const platform = getPlatformKey(store.store);
                           return (
-                            <a key={idx} href={href} target="_blank" rel="noopener noreferrer"
-                              onClick={() => { if (isAffiliatePlatform(store.store)) trackAffiliateClick({ productId: monitor.id, platform, source: 'productcard', url: trackingUrl, productName: monitor.name }); }}
+                            <button
+                              type="button"
+                              key={idx}
+                              onClick={async () => {
+                                if (isAffiliatePlatform(store.store)) {
+                                  trackAffiliateClick({ productId: monitor.id, platform, source: 'productcard', url: trackingUrl, productName: monitor.name });
+                                }
+                                await openVerifiedLinkInPage(href);
+                              }}
                               className="flex-1 text-center py-2 text-sm font-medium bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
                             >
                               {isCoupangUrl(trackingUrl) ? '쿠팡' : store.store || '최저가 보기'} <ExternalLink className="w-3 h-3 inline ml-1" />
-                            </a>
+                            </button>
                           );
                         })}
                       </div>
@@ -487,8 +505,11 @@ function MonitorProductCard({
 }) {
   const [isExpanded, setIsExpanded] = useState(false);
   const [showPriceHistory, setShowPriceHistory] = useState(false);
-  const savingsPercent = Math.round(((monitor.prices.original - monitor.prices.current) / monitor.prices.original) * 100);
-  const isPriceGood = monitor.priceIndex >= 80;
+  const hasCurrentPrice = monitor.prices.current > 0;
+  const savingsPercent = hasCurrentPrice && monitor.prices.original > 0
+    ? Math.round(((monitor.prices.original - monitor.prices.current) / monitor.prices.original) * 100)
+    : 0;
+  const isPriceGood = hasCurrentPrice && monitor.priceIndex >= 80;
   const staticPriceHistory = monitorPriceHistory[monitor.id] || [];
   const { history: apiPriceHistory } = usePriceHistory(showPriceHistory ? monitor.id : null);
   const { openVerifiedLink, redirectError, clearRedirectError } = useVerifiedRedirect();
@@ -498,13 +519,13 @@ function MonitorProductCard({
 
   // 전체 스토어 노출 (가격 오름차순)
   const sortedStores = useMemo(() => {
-    return [...monitor.stores].sort((a, b) => getStoreVerifiedPrice(a) - getStoreVerifiedPrice(b));
+    return [...monitor.stores].sort((a, b) => getStoreSortPrice(a) - getStoreSortPrice(b));
   }, [monitor.stores]);
 
   const storeUrls = useMemo(() => sortedStores.map((store) => getStoreTrackingUrl(store)), [sortedStores]);
   const { affiliateUrls } = useAffiliateBatch(storeUrls, `monitor_${monitor.id}`);
 
-  const ctaStore = sortedStores[0];
+  const ctaStore = sortedStores.find((store) => canShowStorePrice(store));
   const ctaStoreIdx = ctaStore ? sortedStores.indexOf(ctaStore) : -1;
   const ctaHref = useMemo(() => {
     if (!ctaStore) return undefined;
@@ -514,7 +535,12 @@ function MonitorProductCard({
   }, [ctaStore, ctaStoreIdx, affiliateUrls]);
   const ctaTrackingUrl = ctaStore ? getStoreTrackingUrl(ctaStore) : '';
   const absoluteLowestPrice = useMemo(
-    () => (sortedStores.length > 0 ? Math.min(...sortedStores.map((store) => getStoreVerifiedPrice(store))) : 0),
+    () => {
+      const prices = sortedStores
+        .map((store) => getStoreDisplayPrice(store))
+        .filter((price): price is number => price !== null && price > 0);
+      return prices.length > 0 ? Math.min(...prices) : 0;
+    },
     [sortedStores],
   );
 
@@ -631,7 +657,7 @@ function MonitorProductCard({
         {/* Price */}
         <div className="mb-2 mt-auto">
           <div className="flex items-baseline gap-1.5 mb-0.5">
-            <span className="text-lg font-bold text-slate-900">{monitor.prices.current.toLocaleString()}원</span>
+            <span className="text-lg font-bold text-slate-900">{hasCurrentPrice ? `${monitor.prices.current.toLocaleString()}원` : '가격 확인 필요'}</span>
             {savingsPercent > 0 && <span className="text-xs text-slate-400 line-through">{monitor.prices.original.toLocaleString()}원</span>}
           </div>
           {savingsPercent > 0 && (
@@ -639,11 +665,11 @@ function MonitorProductCard({
               <TrendingDown className="w-3 h-3 inline mr-0.5" />{savingsPercent}% 할인
             </span>
           )}
-          <p className="text-[10px] text-slate-400 mt-0.5">역대최저 {monitor.prices.lowest.toLocaleString()}원</p>
+          {monitor.prices.lowest > 0 && <p className="text-[10px] text-slate-400 mt-0.5">역대최저 {monitor.prices.lowest.toLocaleString()}원</p>}
         </div>
 
         {/* CTA */}
-        {ctaStore && (
+        {ctaStore && getStoreVerifiedPrice(ctaStore) > 0 && (
           <button
             type="button"
             onClick={handleCtaClick}
@@ -686,7 +712,7 @@ function MonitorProductCard({
                   <div>
                     <p className="text-xs font-medium flex items-center gap-1">
                       {store.store}
-                      {storePrice === absoluteLowestPrice && <span className="text-[9px] bg-emerald-100 text-emerald-600 px-1 rounded">최저가</span>}
+                      {storePrice > 0 && storePrice === absoluteLowestPrice && <span className="text-[9px] bg-emerald-100 text-emerald-600 px-1 rounded">최저가</span>}
                       {isAff && <span className="text-[9px] bg-blue-100 text-blue-600 px-1 rounded">제휴</span>}
                     </p>
                     <p className="text-[10px] text-slate-400">
@@ -696,7 +722,7 @@ function MonitorProductCard({
                     </p>
                   </div>
                 </div>
-                <p className="text-xs font-bold">{storePrice.toLocaleString()}원</p>
+                <p className="text-xs font-bold">{storePrice > 0 ? `${storePrice.toLocaleString()}원` : '가격 확인 필요'}</p>
               </button>
             );
           })}

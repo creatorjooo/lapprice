@@ -12,6 +12,12 @@ export interface StorePrice {
   rawPrice?: number;
   verifiedPrice?: number;
   verifiedAt?: string | null;
+  displayPrice?: number | null;
+  priceState?: 'verified_fresh' | 'verified_stale' | 'unverified' | 'personalized';
+  freshUntil?: string | null;
+  canClaimLowest?: boolean;
+  clickPolicy?: 'direct' | 'recheck_required' | 'blocked';
+  priceToken?: string | null;
   verificationStatus?: 'verified' | 'failed' | 'stale';
   verificationMethod?: 'api' | 'browser' | 'fallback';
   shipping: number;
@@ -23,6 +29,9 @@ export interface StorePrice {
   isActive?: boolean;
   lastErrorCode?: string | null;
   lastErrorMessage?: string | null;
+  lastDeltaPercent?: number;
+  mismatchCount?: number;
+  lastVerifyLatencyMs?: number | null;
   isLowest: boolean;
 }
 

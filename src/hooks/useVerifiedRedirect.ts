@@ -1,6 +1,6 @@
 import { useCallback, useState } from 'react';
 
-const DEFAULT_ERROR = '현재 가격 검증 실패, 잠시 후 재시도해주세요.';
+const DEFAULT_ERROR = '현재 가격 확인에 실패했습니다. 잠시 후 다시 시도해주세요.';
 
 export function useVerifiedRedirect() {
   const [redirectError, setRedirectError] = useState<string | null>(null);

@@ -17,6 +17,7 @@ try {
 const app = express();
 app.use(cors());
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
 const PORT = process.env.PORT || 3001;
 const CACHE_TTL = parseInt(process.env.CACHE_TTL || '300', 10);

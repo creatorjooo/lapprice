@@ -18,7 +18,15 @@ import { usePriceHistory, useProducts } from '@/hooks/useProducts';
 import { useAffiliateBatch, isCoupangUrl } from '@/hooks/useAffiliateLink';
 import { useVerifiedRedirect } from '@/hooks/useVerifiedRedirect';
 import { trackAffiliateClick, getPlatformKey, isAffiliatePlatform } from '@/utils/tracking';
-import { getStoreHref, getStoreTrackingUrl, getStoreVerifiedPrice, isStoreVerified } from '@/utils/offers';
+import {
+  canShowStorePrice,
+  getStoreDisplayPrice,
+  getStoreHref,
+  getStoreSortPrice,
+  getStoreTrackingUrl,
+  getStoreVerifiedPrice,
+  isStoreVerified,
+} from '@/utils/offers';
 import { cn } from '@/lib/utils';
 import { formatStoreUpdatedAt } from '@/utils/time';
 import type { Desktop, DesktopFilterState, PriceHistory } from '@/types';
@@ -48,6 +56,7 @@ export default function DesktopPage({
   onNavigateToPage,
 }: DesktopPageProps) {
   const productListRef = useRef<HTMLDivElement>(null);
+  const { openVerifiedLink: openVerifiedLinkInPage } = useVerifiedRedirect();
 
   // API 자동 데이터 + 정적 데이터 fallback
   const { products: apiDesktops, isLoading: isApiLoading, isFromApi, lastSync, refresh } = useProducts<Desktop>('desktop');
@@ -247,7 +256,9 @@ export default function DesktopPage({
                         fallbackText={desktop.name}
                       />
                       <div className="flex items-end gap-2 mb-3">
-                        <span className="text-2xl font-bold text-slate-900">{desktop.prices.current.toLocaleString()}원</span>
+                        <span className="text-2xl font-bold text-slate-900">
+                          {desktop.prices.current > 0 ? `${desktop.prices.current.toLocaleString()}원` : '가격 확인 필요'}
+                        </span>
                         {desktop.discount.percent > 0 && <Badge variant="destructive" className="text-xs">-{desktop.discount.percent}%</Badge>}
                       </div>
                       <div className="flex flex-wrap gap-1 mb-3">
@@ -259,12 +270,19 @@ export default function DesktopPage({
                           const trackingUrl = getStoreTrackingUrl(store) || href;
                           const platform = getPlatformKey(store.store);
                           return (
-                            <a key={idx} href={href} target="_blank" rel="noopener noreferrer"
-                              onClick={() => { if (isAffiliatePlatform(store.store)) trackAffiliateClick({ productId: desktop.id, platform, source: 'productcard', url: trackingUrl, productName: desktop.name }); }}
+                            <button
+                              type="button"
+                              key={idx}
+                              onClick={async () => {
+                                if (isAffiliatePlatform(store.store)) {
+                                  trackAffiliateClick({ productId: desktop.id, platform, source: 'productcard', url: trackingUrl, productName: desktop.name });
+                                }
+                                await openVerifiedLinkInPage(href);
+                              }}
                               className="flex-1 text-center py-2 text-sm font-medium bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors"
                             >
                               {isCoupangUrl(trackingUrl) ? '쿠팡' : store.store || '최저가 보기'} <ExternalLink className="w-3 h-3 inline ml-1" />
-                            </a>
+                            </button>
                           );
                         })}
                       </div>
@@ -470,8 +488,11 @@ function DesktopProductCard({
 }) {
   const [isExpanded, setIsExpanded] = useState(false);
   const [showPriceHistory, setShowPriceHistory] = useState(false);
-  const savingsPercent = Math.round(((desktop.prices.original - desktop.prices.current) / desktop.prices.original) * 100);
-  const isPriceGood = desktop.priceIndex >= 80;
+  const hasCurrentPrice = desktop.prices.current > 0;
+  const savingsPercent = hasCurrentPrice && desktop.prices.original > 0
+    ? Math.round(((desktop.prices.original - desktop.prices.current) / desktop.prices.original) * 100)
+    : 0;
+  const isPriceGood = hasCurrentPrice && desktop.priceIndex >= 80;
   const staticPriceHistory = desktopPriceHistory[desktop.id] || [];
   const { history: apiPriceHistory } = usePriceHistory(showPriceHistory ? desktop.id : null);
   const { openVerifiedLink, redirectError, clearRedirectError } = useVerifiedRedirect();
@@ -481,13 +502,13 @@ function DesktopProductCard({
 
   // 전체 스토어 노출 (가격 오름차순)
   const sortedStores = useMemo(() => {
-    return [...desktop.stores].sort((a, b) => getStoreVerifiedPrice(a) - getStoreVerifiedPrice(b));
+    return [...desktop.stores].sort((a, b) => getStoreSortPrice(a) - getStoreSortPrice(b));
   }, [desktop.stores]);
 
   const storeUrls = useMemo(() => sortedStores.map((store) => getStoreTrackingUrl(store)), [sortedStores]);
   const { affiliateUrls } = useAffiliateBatch(storeUrls, `desktop_${desktop.id}`);
 
-  const ctaStore = sortedStores[0];
+  const ctaStore = sortedStores.find((store) => canShowStorePrice(store));
   const ctaStoreIdx = ctaStore ? sortedStores.indexOf(ctaStore) : -1;
   const ctaHref = useMemo(() => {
     if (!ctaStore) return undefined;
@@ -497,7 +518,12 @@ function DesktopProductCard({
   }, [ctaStore, ctaStoreIdx, affiliateUrls]);
   const ctaTrackingUrl = ctaStore ? getStoreTrackingUrl(ctaStore) : '';
   const absoluteLowestPrice = useMemo(
-    () => (sortedStores.length > 0 ? Math.min(...sortedStores.map((store) => getStoreVerifiedPrice(store))) : 0),
+    () => {
+      const prices = sortedStores
+        .map((store) => getStoreDisplayPrice(store))
+        .filter((price): price is number => price !== null && price > 0);
+      return prices.length > 0 ? Math.min(...prices) : 0;
+    },
     [sortedStores],
   );
 
@@ -614,7 +640,7 @@ function DesktopProductCard({
 
         <div className="mb-2 mt-auto">
           <div className="flex items-baseline gap-1.5 mb-0.5">
-            <span className="text-lg font-bold text-slate-900">{desktop.prices.current.toLocaleString()}원</span>
+            <span className="text-lg font-bold text-slate-900">{hasCurrentPrice ? `${desktop.prices.current.toLocaleString()}원` : '가격 확인 필요'}</span>
             {savingsPercent > 0 && <span className="text-xs text-slate-400 line-through">{desktop.prices.original.toLocaleString()}원</span>}
           </div>
           {savingsPercent > 0 && (
@@ -622,10 +648,10 @@ function DesktopProductCard({
               <TrendingDown className="w-3 h-3 inline mr-0.5" />{savingsPercent}% 할인
             </span>
           )}
-          <p className="text-[10px] text-slate-400 mt-0.5">역대최저 {desktop.prices.lowest.toLocaleString()}원</p>
+          {desktop.prices.lowest > 0 && <p className="text-[10px] text-slate-400 mt-0.5">역대최저 {desktop.prices.lowest.toLocaleString()}원</p>}
         </div>
 
-        {ctaStore && (
+        {ctaStore && getStoreVerifiedPrice(ctaStore) > 0 && (
           <button
             type="button"
             onClick={handleCtaClick}
@@ -667,7 +693,7 @@ function DesktopProductCard({
                   <div>
                     <p className="text-xs font-medium flex items-center gap-1">
                       {store.store}
-                      {storePrice === absoluteLowestPrice && <span className="text-[9px] bg-emerald-100 text-emerald-600 px-1 rounded">최저가</span>}
+                      {storePrice > 0 && storePrice === absoluteLowestPrice && <span className="text-[9px] bg-emerald-100 text-emerald-600 px-1 rounded">최저가</span>}
                       {isAff && <span className="text-[9px] bg-blue-100 text-blue-600 px-1 rounded">제휴</span>}
                     </p>
                     <p className="text-[10px] text-slate-400">
@@ -677,7 +703,7 @@ function DesktopProductCard({
                     </p>
                   </div>
                 </div>
-                <p className="text-xs font-bold">{storePrice.toLocaleString()}원</p>
+                <p className="text-xs font-bold">{storePrice > 0 ? `${storePrice.toLocaleString()}원` : '가격 확인 필요'}</p>
               </button>
             );
           })}

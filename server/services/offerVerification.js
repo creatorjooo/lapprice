@@ -40,6 +40,30 @@ function getVerificationTimeoutMs() {
   return Math.max(1500, parseInt(process.env.VERIFICATION_TIMEOUT_MS || '6500', 10) || 6500);
 }
 
+function getClickVerifyTimeoutMs() {
+  return Math.max(1200, parseInt(process.env.CLICK_VERIFY_TIMEOUT_MS || '2500', 10) || 2500);
+}
+
+function getListingPriceTtlSec() {
+  return Math.max(30, parseInt(process.env.LISTING_PRICE_TTL_SEC || '300', 10) || 300);
+}
+
+function getDisplayPriceFreshMinutes() {
+  return Math.max(5, parseInt(process.env.DISPLAY_PRICE_FRESH_MINUTES || `${getStaleMinutes()}`, 10) || getStaleMinutes());
+}
+
+function getDisplayPriceFreshMs() {
+  return getDisplayPriceFreshMinutes() * 60 * 1000;
+}
+
+function isStrictPriceGuardEnabled() {
+  return process.env.STRICT_PRICE_GUARD !== 'false';
+}
+
+function isDegradedRedirectAllowed() {
+  return process.env.ALLOW_DEGRADED_REDIRECT === 'true';
+}
+
 function getNaverVerifyMinIntervalMs() {
   return Math.max(100, parseInt(process.env.NAVER_VERIFY_MIN_INTERVAL_MS || '120', 10) || 120);
 }
@@ -137,6 +161,190 @@ function normalizeText(value) {
     .toLowerCase()
     .replace(/<[^>]*>/g, '')
     .replace(/[^a-z0-9가-힣]/g, '');
+}
+
+function inferSourceFromStore(store) {
+  const sourceRaw = String(store?.source || '').trim().toLowerCase();
+  if (sourceRaw && sourceRaw !== 'unknown') return sourceRaw;
+
+  const storeName = String(store?.store || '').toLowerCase();
+  if (storeName.includes('쿠팡')) return 'coupang';
+  if (storeName.includes('네이버')) return 'naver';
+  if (storeName.includes('11')) return '11st';
+  if (storeName.includes('g마켓') || storeName.includes('gmarket')) return 'gmarket';
+  if (storeName.includes('옥션')) return 'auction';
+  if (storeName.includes('다나와')) return 'danawa';
+  if (storeName.includes('에누리')) return 'ennuri';
+  if (storeName.includes('ssg')) return 'ssg';
+  if (storeName.includes('롯데')) return 'lotteon';
+  if (storeName.includes('인터파크')) return 'interpark';
+
+  const sourceUrl = String(store?.sourceUrl || store?.url || '').toLowerCase();
+  if (sourceUrl.includes('coupang')) return 'coupang';
+  if (sourceUrl.includes('naver')) return 'naver';
+  if (sourceUrl.includes('11st')) return '11st';
+  if (sourceUrl.includes('gmarket')) return 'gmarket';
+  if (sourceUrl.includes('auction')) return 'auction';
+  if (sourceUrl.includes('danawa')) return 'danawa';
+  if (sourceUrl.includes('enuri')) return 'ennuri';
+  if (sourceUrl.includes('ssg')) return 'ssg';
+  if (sourceUrl.includes('lotteon')) return 'lotteon';
+  if (sourceUrl.includes('interpark')) return 'interpark';
+  return 'unknown';
+}
+
+function base64urlEncode(value) {
+  const raw = Buffer.isBuffer(value) ? value : Buffer.from(String(value), 'utf-8');
+  return raw.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+}
+
+function base64urlDecode(value) {
+  const input = String(value || '').replace(/-/g, '+').replace(/_/g, '/');
+  const pad = input.length % 4;
+  const normalized = input + (pad === 0 ? '' : '='.repeat(4 - pad));
+  return Buffer.from(normalized, 'base64').toString('utf-8');
+}
+
+function getTokenSecret() {
+  return String(
+    process.env.PRICE_TOKEN_SECRET
+    || process.env.ADMIN_PASSWORD
+    || process.env.COUPANG_SECRET_KEY
+    || 'lapprice-price-token',
+  );
+}
+
+function signTokenPayload(encodedPayload) {
+  return base64urlEncode(
+    crypto.createHmac('sha256', getTokenSecret()).update(String(encodedPayload || ''), 'utf-8').digest(),
+  );
+}
+
+function createSignedToken(payload, ttlSec) {
+  const expiresAt = Date.now() + (Math.max(5, ttlSec) * 1000);
+  const safePayload = {
+    ...payload,
+    exp: expiresAt,
+  };
+  const encoded = base64urlEncode(JSON.stringify(safePayload));
+  const signature = signTokenPayload(encoded);
+  return `${encoded}.${signature}`;
+}
+
+function verifySignedToken(token) {
+  const raw = String(token || '').trim();
+  if (!raw || !raw.includes('.')) {
+    return { ok: false, code: 'TOKEN_MISSING' };
+  }
+
+  const [encoded, signature] = raw.split('.');
+  if (!encoded || !signature) {
+    return { ok: false, code: 'TOKEN_INVALID' };
+  }
+
+  const expectedSignature = signTokenPayload(encoded);
+  if (signature !== expectedSignature) {
+    return { ok: false, code: 'TOKEN_SIGNATURE_INVALID' };
+  }
+
+  try {
+    const payload = JSON.parse(base64urlDecode(encoded));
+    if (!payload || typeof payload !== 'object') {
+      return { ok: false, code: 'TOKEN_PAYLOAD_INVALID' };
+    }
+    const exp = Number(payload.exp);
+    if (!Number.isFinite(exp) || exp <= Date.now()) {
+      return { ok: false, code: 'TOKEN_EXPIRED', payload };
+    }
+    return { ok: true, payload };
+  } catch {
+    return { ok: false, code: 'TOKEN_DECODE_FAILED' };
+  }
+}
+
+function createPriceToken({ offerId, listedPrice, verifiedAt }) {
+  const price = toNumber(listedPrice);
+  if (!offerId || price <= 0) return null;
+
+  return createSignedToken({
+    purpose: 'price',
+    offerId: String(offerId),
+    listedPrice: price,
+    verifiedAt: isIsoDate(verifiedAt) ? new Date(verifiedAt).toISOString() : null,
+  }, getListingPriceTtlSec());
+}
+
+function verifyPriceToken(token, expectedOfferId) {
+  const parsed = verifySignedToken(token);
+  if (!parsed.ok) return parsed;
+
+  const payload = parsed.payload || {};
+  if (payload.purpose !== 'price') {
+    return { ok: false, code: 'TOKEN_PURPOSE_MISMATCH', payload };
+  }
+
+  if (expectedOfferId && String(payload.offerId || '') !== String(expectedOfferId)) {
+    return { ok: false, code: 'TOKEN_OFFER_MISMATCH', payload };
+  }
+
+  const listedPrice = toNumber(payload.listedPrice);
+  if (listedPrice <= 0) {
+    return { ok: false, code: 'TOKEN_PRICE_INVALID', payload };
+  }
+
+  return {
+    ok: true,
+    payload: {
+      ...payload,
+      offerId: String(payload.offerId),
+      listedPrice,
+      verifiedAt: isIsoDate(payload.verifiedAt) ? new Date(payload.verifiedAt).toISOString() : null,
+      exp: Number(payload.exp),
+    },
+  };
+}
+
+function createConfirmToken({ offerId, oldPrice, newPrice }) {
+  const safeOld = toNumber(oldPrice);
+  const safeNew = toNumber(newPrice);
+  if (!offerId || safeOld <= 0 || safeNew <= 0) return null;
+
+  return createSignedToken({
+    purpose: 'confirm',
+    offerId: String(offerId),
+    oldPrice: safeOld,
+    newPrice: safeNew,
+  }, 60);
+}
+
+function verifyConfirmToken(token, expectedOfferId) {
+  const parsed = verifySignedToken(token);
+  if (!parsed.ok) return parsed;
+
+  const payload = parsed.payload || {};
+  if (payload.purpose !== 'confirm') {
+    return { ok: false, code: 'TOKEN_PURPOSE_MISMATCH', payload };
+  }
+  if (expectedOfferId && String(payload.offerId || '') !== String(expectedOfferId)) {
+    return { ok: false, code: 'TOKEN_OFFER_MISMATCH', payload };
+  }
+
+  const oldPrice = toNumber(payload.oldPrice);
+  const newPrice = toNumber(payload.newPrice);
+  if (oldPrice <= 0 || newPrice <= 0) {
+    return { ok: false, code: 'TOKEN_PRICE_INVALID', payload };
+  }
+
+  return {
+    ok: true,
+    payload: {
+      ...payload,
+      offerId: String(payload.offerId),
+      oldPrice,
+      newPrice,
+      exp: Number(payload.exp),
+    },
+  };
 }
 
 function toSafeString(value, fallback = '') {
@@ -509,15 +717,53 @@ function saveCatalogFile(productType, catalog) {
   fs.writeFileSync(filePath, JSON.stringify(catalog, null, 2), 'utf-8');
 }
 
+function getFreshUntilIso(verifiedAt) {
+  if (!isIsoDate(verifiedAt)) return null;
+  const freshUntilMs = Date.parse(verifiedAt) + (getListingPriceTtlSec() * 1000);
+  return new Date(freshUntilMs).toISOString();
+}
+
+function isVerifiedFreshStore(store, nowMs = Date.now()) {
+  if (normalizeStatus(store?.verificationStatus, 'failed') !== 'verified') return false;
+  if (!toSafeBool(store?.isActive, false)) return false;
+  const verifiedPrice = toNumber(store?.verifiedPrice);
+  if (verifiedPrice <= 0) return false;
+  if (!isIsoDate(store?.verifiedAt)) return false;
+  const verifiedAtMs = Date.parse(store.verifiedAt);
+  return (nowMs - verifiedAtMs) <= getDisplayPriceFreshMs();
+}
+
+function getStorePriceState(store, nowMs = Date.now()) {
+  if (String(store?.priceState || '') === 'personalized') return 'personalized';
+  if (isVerifiedFreshStore(store, nowMs)) return 'verified_fresh';
+  if (normalizeStatus(store?.verificationStatus, 'failed') === 'verified' && toNumber(store?.verifiedPrice) > 0) {
+    return 'verified_stale';
+  }
+  return 'unverified';
+}
+
+function getStoreDisplayPrice(store, nowMs = Date.now()) {
+  const state = getStorePriceState(store, nowMs);
+  if (state !== 'verified_fresh') return null;
+  const verifiedPrice = toNumber(store?.verifiedPrice);
+  return verifiedPrice > 0 ? verifiedPrice : null;
+}
+
+function computeDeltaPercent(beforePrice, afterPrice) {
+  const before = toNumber(beforePrice);
+  const after = toNumber(afterPrice);
+  if (before <= 0 || after <= 0) return 0;
+  return Number((((after - before) / before) * 100).toFixed(2));
+}
+
 function markStoreStatusByFreshness(store, nowMs) {
   let changed = false;
 
   const staleByTime = store.verifiedAt && Number.isFinite(Date.parse(store.verifiedAt))
-    ? (nowMs - Date.parse(store.verifiedAt)) > getStaleMs()
+    ? (nowMs - Date.parse(store.verifiedAt)) > getDisplayPriceFreshMs()
     : true;
-  const staleByRawMismatch = store.rawPrice > 0 && store.verifiedPrice > 0 && store.rawPrice !== store.verifiedPrice;
 
-  if (store.verificationStatus === 'verified' && (staleByTime || staleByRawMismatch)) {
+  if (store.verificationStatus === 'verified' && staleByTime) {
     store.verificationStatus = 'stale';
     store.isActive = false;
     changed = true;
@@ -606,6 +852,47 @@ function ensureStoreOfferMetadata(product, store) {
 
   const now = Date.now();
   if (markStoreStatusByFreshness(store, now)) {
+    changed = true;
+  }
+
+  const priceState = getStorePriceState(store, now);
+  if (store.priceState !== priceState) {
+    store.priceState = priceState;
+    changed = true;
+  }
+
+  const displayPrice = getStoreDisplayPrice(store, now);
+  const normalizedDisplayPrice = displayPrice === null ? null : toNumber(displayPrice);
+  if ((store.displayPrice ?? null) !== normalizedDisplayPrice) {
+    store.displayPrice = normalizedDisplayPrice;
+    changed = true;
+  }
+
+  const freshUntil = getFreshUntilIso(store.verifiedAt);
+  if ((store.freshUntil || null) !== (freshUntil || null)) {
+    store.freshUntil = freshUntil;
+    changed = true;
+  }
+
+  const nextMismatchCount = Math.max(0, parseInt(store.mismatchCount || '0', 10) || 0);
+  if (store.mismatchCount !== nextMismatchCount) {
+    store.mismatchCount = nextMismatchCount;
+    changed = true;
+  }
+
+  const nextDelta = Number.isFinite(Number(store.lastDeltaPercent))
+    ? Number(store.lastDeltaPercent)
+    : 0;
+  if (store.lastDeltaPercent !== nextDelta) {
+    store.lastDeltaPercent = nextDelta;
+    changed = true;
+  }
+
+  const nextLatency = Number.isFinite(Number(store.lastVerifyLatencyMs))
+    ? Math.max(0, Math.round(Number(store.lastVerifyLatencyMs)))
+    : null;
+  if ((store.lastVerifyLatencyMs ?? null) !== nextLatency) {
+    store.lastVerifyLatencyMs = nextLatency;
     changed = true;
   }
 
@@ -971,6 +1258,21 @@ function pickBestCandidate(candidates, rawPrice) {
   return best || candidates[0];
 }
 
+function hasPersonalizedPriceHints(html) {
+  const text = String(html || '').toLowerCase();
+  return [
+    '회원가',
+    '회원 할인',
+    '쿠폰가',
+    '쿠폰 적용',
+    '카드할인',
+    '와우회원',
+    '로그인 후',
+    '최종 혜택가',
+    '최대혜택가',
+  ].some((keyword) => text.includes(keyword.toLowerCase()));
+}
+
 async function verifyWithBrowserFallback(store) {
   const sourceUrl = String(store.sourceUrl || store.url || '').trim();
   if (!isHttpUrl(sourceUrl)) {
@@ -993,10 +1295,13 @@ async function verifyWithBrowserFallback(store) {
     const verifiedPrice = pickBestCandidate(candidates, store.rawPrice);
 
     if (verifiedPrice <= 0) {
+      const personalized = hasPersonalizedPriceHints(html);
       return {
         ok: false,
-        code: 'BROWSER_PRICE_NOT_FOUND',
-        message: '브라우저 파서로 가격을 추출하지 못했습니다.',
+        code: personalized ? 'PERSONALIZED_PRICE' : 'BROWSER_PRICE_NOT_FOUND',
+        message: personalized
+          ? '개인화/회원 전용 가격으로 고정 가격 검증이 어렵습니다.'
+          : '브라우저 파서로 가격을 추출하지 못했습니다.',
         method: 'browser',
       };
     }
@@ -1018,6 +1323,7 @@ function isSupportedStore(store) {
 }
 
 async function runOfferVerification(store, product) {
+  const startedAt = Date.now();
   const sourceUrl = String(store?.sourceUrl || store?.url || '');
 
   let primary = null;
@@ -1027,10 +1333,20 @@ async function runOfferVerification(store, product) {
     primary = await verifyWithCoupangApi(store, product);
   }
 
-  if (primary?.ok) return primary;
+  if (primary?.ok) {
+    return {
+      ...primary,
+      latencyMs: Date.now() - startedAt,
+    };
+  }
 
   const browser = await verifyWithBrowserFallback(store, product);
-  if (browser.ok) return browser;
+  if (browser.ok) {
+    return {
+      ...browser,
+      latencyMs: Date.now() - startedAt,
+    };
+  }
 
   if (primary && !primary.ok) {
     return {
@@ -1038,6 +1354,7 @@ async function runOfferVerification(store, product) {
       code: primary.code || browser.code || 'VERIFY_FAILED',
       message: primary.message || browser.message || '검증 실패',
       method: primary.method || browser.method || 'fallback',
+      latencyMs: Date.now() - startedAt,
     };
   }
 
@@ -1046,16 +1363,32 @@ async function runOfferVerification(store, product) {
     code: browser.code || 'VERIFY_FAILED',
     message: browser.message || '검증 실패',
     method: browser.method || 'fallback',
+    latencyMs: Date.now() - startedAt,
   };
 }
 
 function applyVerificationSuccess(store, result) {
   const now = new Date().toISOString();
-  store.verifiedPrice = toNumber(result.price);
+  const beforeDisplay = toNumber(store.displayPrice || store.verifiedPrice || store.rawPrice || store.price);
+  const verifiedPrice = toNumber(result.price);
+  const deltaPercent = computeDeltaPercent(beforeDisplay, verifiedPrice);
+
+  store.verifiedPrice = verifiedPrice;
   store.verificationStatus = 'verified';
   store.verificationMethod = normalizeMethod(result.method, 'api');
   store.verifiedAt = now;
+  store.freshUntil = getFreshUntilIso(now);
+  store.displayPrice = verifiedPrice;
+  store.priceState = 'verified_fresh';
+  store.price = verifiedPrice;
   store.isActive = true;
+  store.lastDeltaPercent = deltaPercent;
+  if (beforeDisplay > 0 && verifiedPrice > 0 && beforeDisplay !== verifiedPrice) {
+    store.mismatchCount = Math.max(0, parseInt(store.mismatchCount || '0', 10) || 0) + 1;
+  }
+  store.lastVerifyLatencyMs = Number.isFinite(Number(result?.latencyMs))
+    ? Math.max(0, Math.round(Number(result.latencyMs)))
+    : null;
   store.lastErrorCode = null;
   store.lastErrorMessage = null;
 }
@@ -1064,6 +1397,12 @@ function applyVerificationFailure(store, result) {
   store.verificationStatus = 'failed';
   store.verificationMethod = normalizeMethod(result?.method, 'fallback');
   store.isActive = false;
+  store.displayPrice = null;
+  store.freshUntil = null;
+  store.priceState = String(result?.code || '') === 'PERSONALIZED_PRICE' ? 'personalized' : 'unverified';
+  store.lastVerifyLatencyMs = Number.isFinite(Number(result?.latencyMs))
+    ? Math.max(0, Math.round(Number(result.latencyMs)))
+    : null;
   store.lastErrorCode = String(result?.code || 'VERIFY_FAILED');
   store.lastErrorMessage = String(result?.message || '가격 검증 실패');
 }
@@ -1099,7 +1438,12 @@ function findOfferById(offerId) {
 async function verifyOfferById(offerId, options = {}) {
   const trigger = options.trigger || 'manual';
   const force = options.force !== false;
-  const allowUnverifiedRedirect = options.allowUnverifiedRedirect !== false;
+  const strictGuard = options.strictGuard ?? isStrictPriceGuardEnabled();
+  const allowUnverifiedRedirect = options.allowUnverifiedRedirect ?? (!strictGuard || isDegradedRedirectAllowed());
+  const listedPrice = toNumber(options.listedPrice);
+  const listedVerifiedAt = isIsoDate(options.listedVerifiedAt)
+    ? new Date(options.listedVerifiedAt).toISOString()
+    : null;
 
   const found = findOfferById(offerId);
   if (!found) {
@@ -1121,13 +1465,12 @@ async function verifyOfferById(offerId, options = {}) {
   const beforeStatus = store.verificationStatus;
   const beforePrice = toNumber(store.verifiedPrice);
   const now = Date.now();
-  const isFresh = store.verificationStatus === 'verified'
-    && store.verifiedAt
-    && Number.isFinite(Date.parse(store.verifiedAt))
-    && (now - Date.parse(store.verifiedAt)) <= getStaleMs()
-    && store.rawPrice === store.verifiedPrice;
+  const isFresh = isVerifiedFreshStore(store, now)
+    && toNumber(store.verifiedPrice) > 0;
 
   if (!force && isFresh) {
+    const currentPrice = toNumber(store.verifiedPrice);
+    const priceChanged = listedPrice > 0 && currentPrice > 0 && listedPrice !== currentPrice;
     return {
       ok: true,
       offerId,
@@ -1140,6 +1483,11 @@ async function verifyOfferById(offerId, options = {}) {
       sourceUrl: store.sourceUrl,
       redirectUrl: store.affiliateUrl || store.sourceUrl,
       skipped: true,
+      listedPrice: listedPrice || null,
+      listedVerifiedAt,
+      priceChanged,
+      oldPrice: priceChanged ? listedPrice : null,
+      newPrice: priceChanged ? currentPrice : null,
     };
   }
 
@@ -1160,9 +1508,13 @@ async function verifyOfferById(offerId, options = {}) {
       success: false,
       verificationStatus: store.verificationStatus,
       verificationMethod: store.verificationMethod,
-        errorCode: store.lastErrorCode,
-        errorMessage: store.lastErrorMessage,
-        blocked: trigger === 'click' && !allowUnverifiedRedirect,
+      listedPrice: listedPrice || null,
+      listedVerifiedAt,
+      priceChanged: false,
+      guarded: strictGuard,
+      errorCode: store.lastErrorCode,
+      errorMessage: store.lastErrorMessage,
+      blocked: trigger === 'click' && !allowUnverifiedRedirect,
     });
 
     return {
@@ -1176,6 +1528,10 @@ async function verifyOfferById(offerId, options = {}) {
       message: store.lastErrorMessage,
       sourceUrl: store.sourceUrl,
       redirectUrl: allowUnverifiedRedirect ? (store.affiliateUrl || store.sourceUrl) : null,
+      listedPrice: listedPrice || null,
+      listedVerifiedAt,
+      priceChanged: false,
+      strictGuard,
     };
   }
 
@@ -1190,6 +1546,10 @@ async function verifyOfferById(offerId, options = {}) {
 
   const mismatch = result.ok
     ? (toNumber(store.rawPrice) > 0 && toNumber(store.verifiedPrice) > 0 && toNumber(store.rawPrice) !== toNumber(store.verifiedPrice))
+    : false;
+  const latestVerifiedPrice = toNumber(store.verifiedPrice);
+  const priceChanged = result.ok
+    ? (listedPrice > 0 && latestVerifiedPrice > 0 && listedPrice !== latestVerifiedPrice)
     : false;
 
   appendVerificationLog({
@@ -1208,6 +1568,10 @@ async function verifyOfferById(offerId, options = {}) {
     verifiedPrice: toNumber(store.verifiedPrice),
     verifiedAt: store.verifiedAt,
     mismatch,
+    listedPrice: listedPrice || null,
+    listedVerifiedAt,
+    priceChanged,
+    guarded: strictGuard,
     errorCode: result.ok ? null : store.lastErrorCode,
     errorMessage: result.ok ? null : store.lastErrorMessage,
     blocked: trigger === 'click' && !result.ok && !allowUnverifiedRedirect,
@@ -1227,6 +1591,12 @@ async function verifyOfferById(offerId, options = {}) {
     code: result.ok ? null : store.lastErrorCode,
     message: result.ok ? null : store.lastErrorMessage,
     degradedRedirect: !result.ok && allowUnverifiedRedirect,
+    listedPrice: listedPrice || null,
+    listedVerifiedAt,
+    priceChanged,
+    oldPrice: priceChanged ? listedPrice : null,
+    newPrice: priceChanged ? latestVerifiedPrice : null,
+    strictGuard,
   };
 }
 
@@ -1271,8 +1641,8 @@ async function verifyCatalogOffers(productType, options = {}) {
       const isFresh = store.verificationStatus === 'verified'
         && store.verifiedAt
         && Number.isFinite(Date.parse(store.verifiedAt))
-        && (now - Date.parse(store.verifiedAt)) <= getStaleMs()
-        && toNumber(store.rawPrice) === toNumber(store.verifiedPrice);
+        && (now - Date.parse(store.verifiedAt)) <= getDisplayPriceFreshMs()
+        && toNumber(store.verifiedPrice) > 0;
 
       if (!force && isFresh) {
         summary.skipped += 1;
@@ -1336,24 +1706,53 @@ async function verifyAllOffers(options = {}) {
   return summaries;
 }
 
-function toPublicStore(store) {
+function toPublicStore(store, options = {}) {
+  const nowMs = Number(options.nowMs) || Date.now();
+  const strictGuard = options.strictGuard ?? isStrictPriceGuardEnabled();
   const verifiedPrice = toNumber(store.verifiedPrice);
-  const displayPrice = store.verificationStatus === 'verified' ? verifiedPrice : toNumber(store.rawPrice || store.price);
-  const source = String(store.source || '').trim().toLowerCase() || 'unknown';
-  const collectedAt = isIsoDate(store.collectedAt) ? new Date(store.collectedAt).toISOString() : null;
+  const priceState = getStorePriceState(store, nowMs);
+  const displayPrice = getStoreDisplayPrice(store, nowMs);
+  const source = inferSourceFromStore(store);
+  const collectedAt = isIsoDate(store.collectedAt)
+    ? new Date(store.collectedAt).toISOString()
+    : (isIsoDate(store.updatedAt) ? new Date(store.updatedAt).toISOString() : null);
   const matchScore = Number.isFinite(Number(store.matchScore)) ? Math.max(0, Math.min(100, Number(store.matchScore))) : 0;
+  const freshUntil = getFreshUntilIso(store.verifiedAt);
+  const canClaimLowest = displayPrice !== null && priceState === 'verified_fresh';
+  const priceToken = canClaimLowest
+    ? createPriceToken({
+        offerId: store.offerId,
+        listedPrice: displayPrice,
+        verifiedAt: store.verifiedAt,
+      })
+    : null;
+  const redirectPath = `/r/${store.offerId}`;
+  const redirectUrl = priceToken
+    ? `${redirectPath}?priceToken=${encodeURIComponent(priceToken)}`
+    : redirectPath;
 
   return {
     ...store,
     source,
     collectedAt,
     matchScore,
-    price: displayPrice,
+    displayPrice,
+    display_price: displayPrice,
+    priceState,
+    price_state: priceState,
+    freshUntil,
+    fresh_until: freshUntil,
+    canClaimLowest,
+    clickPolicy: canClaimLowest
+      ? 'recheck_required'
+      : (strictGuard ? 'blocked' : 'recheck_required'),
+    priceToken,
+    price: displayPrice ?? 0,
     verifiedPrice,
     verifiedAt: store.verifiedAt || null,
     verificationStatus: normalizeStatus(store.verificationStatus, 'failed'),
     verificationMethod: normalizeMethod(store.verificationMethod, 'fallback'),
-    url: `/r/${store.offerId}`,
+    url: redirectUrl,
     sourceUrl: String(store.sourceUrl || ''),
     isLowest: false,
   };
@@ -1377,6 +1776,7 @@ function computeDiscount(original, current) {
 }
 
 function prepareCatalogForResponse(productType, options = {}) {
+  const priceMode = String(options.priceMode || 'strict').trim().toLowerCase() || 'strict';
   const fallbackVisibility = isVerifiedOnlyMode() ? 'verified' : 'all';
   const hasLegacyVerifiedOnly = typeof options.verifiedOnly === 'boolean';
   const requestedVisibility = hasLegacyVerifiedOnly
@@ -1384,6 +1784,8 @@ function prepareCatalogForResponse(productType, options = {}) {
     : normalizeStoreVisibility(options.storeVisibility, fallbackVisibility);
   const storeVisibility = normalizeStoreVisibility(requestedVisibility, fallbackVisibility);
   const verifiedOnly = storeVisibility === 'verified';
+  const strictGuard = options.strictGuard ?? isStrictPriceGuardEnabled();
+  const nowMs = Date.now();
   const catalog = readCatalogFile(productType);
   const changed = ensureCatalogOfferMetadata(catalog);
 
@@ -1395,38 +1797,51 @@ function prepareCatalogForResponse(productType, options = {}) {
 
   for (const product of catalog.products || []) {
     const normalizedProduct = normalizeProductShape(productType, product);
-    const stores = (normalizedProduct.stores || []).map((store) => toPublicStore(store));
+    const stores = (normalizedProduct.stores || []).map((store) => toPublicStore(store, { nowMs, strictGuard }));
 
     const visibleStoresRaw = verifiedOnly
-      ? stores.filter((store) => store.verificationStatus === 'verified' && store.isActive && store.verifiedPrice > 0)
-      : stores.filter((store) => toNumber(store.price) > 0 || toNumber(store.rawPrice) > 0);
+      ? stores.filter((store) => store.canClaimLowest && Number(store.displayPrice) > 0)
+      : stores;
 
     if (visibleStoresRaw.length === 0 && verifiedOnly) {
       continue;
     }
 
     const visibleStores = [...visibleStoresRaw];
-    visibleStores.sort((a, b) => a.price - b.price);
-    visibleStores.forEach((store, index) => {
-      store.isLowest = index === 0;
+    visibleStores.sort((a, b) => {
+      const aPrice = Number(a.displayPrice) > 0 ? Number(a.displayPrice) : Number.MAX_SAFE_INTEGER;
+      const bPrice = Number(b.displayPrice) > 0 ? Number(b.displayPrice) : Number.MAX_SAFE_INTEGER;
+      if (aPrice !== bPrice) return aPrice - bPrice;
+      return String(a.store || '').localeCompare(String(b.store || ''));
     });
 
-    const lowest = visibleStores[0]?.price || 0;
+    const lowestStore = visibleStores.find((store) => store.canClaimLowest && Number(store.displayPrice) > 0);
+    const lowest = Number(lowestStore?.displayPrice || 0);
+    visibleStores.forEach((store) => {
+      store.isLowest = !!lowestStore && store.offerId === lowestStore.offerId;
+    });
+
     if (lowest <= 0 && verifiedOnly) {
       continue;
     }
 
-    const original = Math.max(toNumber(normalizedProduct?.prices?.original), lowest || 0);
+    const originalBase = toNumber(normalizedProduct?.prices?.original);
+    const original = lowest > 0 ? Math.max(originalBase, lowest) : originalBase;
     const discount = computeDiscount(original, lowest);
 
     const nextProduct = {
       ...normalizedProduct,
+      priceMode,
       prices: {
         ...normalizedProduct.prices,
-        current: lowest || toNumber(normalizedProduct?.prices?.current),
+        current: lowest > 0 ? lowest : 0,
         original,
-        lowest: Math.min(toNumber(normalizedProduct?.prices?.lowest) || lowest || original, lowest || original),
-        average: Math.max(toNumber(normalizedProduct?.prices?.average) || 0, lowest || 0),
+        lowest: lowest > 0
+          ? Math.min(toNumber(normalizedProduct?.prices?.lowest) || lowest, lowest)
+          : toNumber(normalizedProduct?.prices?.lowest),
+        average: lowest > 0
+          ? Math.max(toNumber(normalizedProduct?.prices?.average) || 0, lowest)
+          : toNumber(normalizedProduct?.prices?.average),
       },
       discount,
       stores: visibleStores,
@@ -1438,6 +1853,11 @@ function prepareCatalogForResponse(productType, options = {}) {
   return {
     ...catalog,
     products,
+    priceMode,
+    listingPriceTtlSec: getListingPriceTtlSec(),
+    displayPriceFreshMinutes: getDisplayPriceFreshMinutes(),
+    generatedAt: new Date(nowMs).toISOString(),
+    strictGuard,
     storeVisibility,
     verifiedOnly,
   };
@@ -1496,20 +1916,29 @@ function getVerificationMetrics(hours = 24) {
 
   const clickAttempts = logs.filter((x) => x.trigger === 'click').length;
   const clickMismatch = logs.filter((x) => x.trigger === 'click' && x.success && x.mismatch).length;
+  const clickGuarded = logs.filter((x) => x.trigger === 'click' && x.priceChanged && x.guarded).length;
+  const hardMismatch = logs.filter((x) => x.trigger === 'click' && x.success && x.mismatch && !x.guarded).length;
   const clickBlocked = logs.filter((x) => x.trigger === 'click' && x.blocked).length;
+  const clickVerifyTimeout = logs.filter((x) => x.trigger === 'click' && String(x.errorCode || '').includes('TIMEOUT')).length;
 
   const metrics = {
     windowHours: hours,
+    hard_mismatch_rate: clickAttempts > 0 ? hardMismatch / clickAttempts : 0,
     price_mismatch_rate: clickAttempts > 0 ? clickMismatch / clickAttempts : 0,
+    price_mismatch_after_confirm: 0,
     verification_success_rate: verificationAttempts > 0 ? verificationSuccess / verificationAttempts : 0,
     stale_offer_rate: catalogStats.totalOffers > 0 ? catalogStats.staleOffers / catalogStats.totalOffers : 0,
     redirect_block_rate: clickAttempts > 0 ? clickBlocked / clickAttempts : 0,
+    click_verify_timeout_rate: clickAttempts > 0 ? clickVerifyTimeout / clickAttempts : 0,
     totals: {
       verificationAttempts,
       verificationSuccess,
       clickAttempts,
       clickMismatch,
+      clickGuarded,
+      hardMismatch,
       clickBlocked,
+      clickVerifyTimeout,
       ...catalogStats,
     },
   };
@@ -1564,12 +1993,21 @@ module.exports = {
   ensureVerificationStorage,
   isVerifiedOnlyMode,
   isClickTimeVerifyEnabled,
+  isStrictPriceGuardEnabled,
+  isDegradedRedirectAllowed,
   getStaleMinutes,
   getVerificationTimeoutMs,
+  getClickVerifyTimeoutMs,
+  getListingPriceTtlSec,
+  getDisplayPriceFreshMinutes,
   prepareCatalogForResponse,
   verifyOfferById,
   verifyCatalogOffers,
   verifyAllOffers,
+  createPriceToken,
+  verifyPriceToken,
+  createConfirmToken,
+  verifyConfirmToken,
   enqueueOfferVerification,
   enqueueBatchVerification,
   getVerificationMetrics,
