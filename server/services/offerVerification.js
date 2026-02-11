@@ -66,7 +66,7 @@ async function throttleApi(platform) {
 }
 
 function isVerifiedOnlyMode() {
-  return process.env.VERIFIED_ONLY_MODE !== 'false';
+  return process.env.VERIFIED_ONLY_MODE === 'true';
 }
 
 function isClickTimeVerifyEnabled() {
@@ -1099,6 +1099,7 @@ function findOfferById(offerId) {
 async function verifyOfferById(offerId, options = {}) {
   const trigger = options.trigger || 'manual';
   const force = options.force !== false;
+  const allowUnverifiedRedirect = options.allowUnverifiedRedirect !== false;
 
   const found = findOfferById(offerId);
   if (!found) {
@@ -1159,9 +1160,9 @@ async function verifyOfferById(offerId, options = {}) {
       success: false,
       verificationStatus: store.verificationStatus,
       verificationMethod: store.verificationMethod,
-      errorCode: store.lastErrorCode,
-      errorMessage: store.lastErrorMessage,
-      blocked: trigger === 'click',
+        errorCode: store.lastErrorCode,
+        errorMessage: store.lastErrorMessage,
+        blocked: trigger === 'click' && !allowUnverifiedRedirect,
     });
 
     return {
@@ -1174,7 +1175,7 @@ async function verifyOfferById(offerId, options = {}) {
       code: store.lastErrorCode,
       message: store.lastErrorMessage,
       sourceUrl: store.sourceUrl,
-      redirectUrl: null,
+      redirectUrl: allowUnverifiedRedirect ? (store.affiliateUrl || store.sourceUrl) : null,
     };
   }
 
@@ -1209,7 +1210,7 @@ async function verifyOfferById(offerId, options = {}) {
     mismatch,
     errorCode: result.ok ? null : store.lastErrorCode,
     errorMessage: result.ok ? null : store.lastErrorMessage,
-    blocked: trigger === 'click' && !result.ok,
+    blocked: trigger === 'click' && !result.ok && !allowUnverifiedRedirect,
   });
 
   return {
@@ -1222,9 +1223,10 @@ async function verifyOfferById(offerId, options = {}) {
     verifiedPrice: toNumber(store.verifiedPrice),
     verifiedAt: store.verifiedAt,
     sourceUrl: store.sourceUrl,
-    redirectUrl: result.ok ? (store.affiliateUrl || store.sourceUrl) : null,
+    redirectUrl: (result.ok || allowUnverifiedRedirect) ? (store.affiliateUrl || store.sourceUrl) : null,
     code: result.ok ? null : store.lastErrorCode,
     message: result.ok ? null : store.lastErrorMessage,
+    degradedRedirect: !result.ok && allowUnverifiedRedirect,
   };
 }
 
@@ -1337,9 +1339,15 @@ async function verifyAllOffers(options = {}) {
 function toPublicStore(store) {
   const verifiedPrice = toNumber(store.verifiedPrice);
   const displayPrice = store.verificationStatus === 'verified' ? verifiedPrice : toNumber(store.rawPrice || store.price);
+  const source = String(store.source || '').trim().toLowerCase() || 'unknown';
+  const collectedAt = isIsoDate(store.collectedAt) ? new Date(store.collectedAt).toISOString() : null;
+  const matchScore = Number.isFinite(Number(store.matchScore)) ? Math.max(0, Math.min(100, Number(store.matchScore))) : 0;
 
   return {
     ...store,
+    source,
+    collectedAt,
+    matchScore,
     price: displayPrice,
     verifiedPrice,
     verifiedAt: store.verifiedAt || null,
@@ -1349,6 +1357,13 @@ function toPublicStore(store) {
     sourceUrl: String(store.sourceUrl || ''),
     isLowest: false,
   };
+}
+
+function normalizeStoreVisibility(value, fallback = 'all') {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (normalized === 'verified') return 'verified';
+  if (normalized === 'all') return 'all';
+  return fallback;
 }
 
 function computeDiscount(original, current) {
@@ -1362,7 +1377,13 @@ function computeDiscount(original, current) {
 }
 
 function prepareCatalogForResponse(productType, options = {}) {
-  const verifiedOnly = options.verifiedOnly ?? isVerifiedOnlyMode();
+  const fallbackVisibility = isVerifiedOnlyMode() ? 'verified' : 'all';
+  const hasLegacyVerifiedOnly = typeof options.verifiedOnly === 'boolean';
+  const requestedVisibility = hasLegacyVerifiedOnly
+    ? (options.verifiedOnly ? 'verified' : 'all')
+    : normalizeStoreVisibility(options.storeVisibility, fallbackVisibility);
+  const storeVisibility = normalizeStoreVisibility(requestedVisibility, fallbackVisibility);
+  const verifiedOnly = storeVisibility === 'verified';
   const catalog = readCatalogFile(productType);
   const changed = ensureCatalogOfferMetadata(catalog);
 
@@ -1376,14 +1397,15 @@ function prepareCatalogForResponse(productType, options = {}) {
     const normalizedProduct = normalizeProductShape(productType, product);
     const stores = (normalizedProduct.stores || []).map((store) => toPublicStore(store));
 
-    const visibleStores = verifiedOnly
+    const visibleStoresRaw = verifiedOnly
       ? stores.filter((store) => store.verificationStatus === 'verified' && store.isActive && store.verifiedPrice > 0)
-      : stores;
+      : stores.filter((store) => toNumber(store.price) > 0 || toNumber(store.rawPrice) > 0);
 
-    if (visibleStores.length === 0 && verifiedOnly) {
+    if (visibleStoresRaw.length === 0 && verifiedOnly) {
       continue;
     }
 
+    const visibleStores = [...visibleStoresRaw];
     visibleStores.sort((a, b) => a.price - b.price);
     visibleStores.forEach((store, index) => {
       store.isLowest = index === 0;
@@ -1416,6 +1438,7 @@ function prepareCatalogForResponse(productType, options = {}) {
   return {
     ...catalog,
     products,
+    storeVisibility,
     verifiedOnly,
   };
 }

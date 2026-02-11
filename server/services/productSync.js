@@ -14,11 +14,31 @@
 const fs = require('fs');
 const path = require('path');
 const { stripHtml, delay } = require('../utils/helpers');
+const { cacheImageFromUrl, isImageCacheEnabled } = require('./imageCache');
 
 const AFFILIATE_LINKS_PATH = path.join(__dirname, '..', 'config', 'affiliate-links.json');
 
 const CATALOG_DIR = path.join(__dirname, '..', 'data', 'catalog');
 const PRICE_HISTORY_DIR = path.join(__dirname, '..', 'data', 'catalog', 'history');
+const PLATFORM_KEYS = ['naver', 'coupang', '11st', 'gmarket', 'auction', 'danawa', 'ennuri', 'ssg', 'lotteon', 'interpark'];
+const PLATFORM_LABELS = {
+  naver: '네이버',
+  coupang: '쿠팡',
+  '11st': '11번가',
+  gmarket: 'G마켓',
+  auction: '옥션',
+  danawa: '다나와',
+  ennuri: '에누리',
+  ssg: 'SSG닷컴',
+  lotteon: '롯데ON',
+  interpark: '인터파크',
+};
+const ENABLE_ALL_PLATFORM_ENRICH = process.env.ENABLE_ALL_PLATFORM_ENRICH !== 'false';
+const PLATFORM_ENRICH_TIMEOUT_MS = Math.max(3000, parseInt(process.env.PLATFORM_ENRICH_TIMEOUT_MS || '12000', 10) || 12000);
+const PLATFORM_ENRICH_RESULT_LIMIT = Math.max(5, Math.min(30, parseInt(process.env.PLATFORM_ENRICH_RESULT_LIMIT || '12', 10) || 12));
+const PLATFORM_MATCH_SCORE_THRESHOLD = Math.max(0, Math.min(100, parseInt(process.env.PLATFORM_MATCH_SCORE_THRESHOLD || '58', 10) || 58));
+const PLATFORM_STORES_PER_SOURCE = Math.max(1, Math.min(3, parseInt(process.env.PLATFORM_STORES_PER_SOURCE || '2', 10) || 2));
+const PLATFORM_ENRICH_CONCURRENCY = Math.max(1, Math.min(8, parseInt(process.env.PLATFORM_ENRICH_CONCURRENCY || '3', 10) || 3));
 
 // 카테고리별 검색 키워드 (네이버 쇼핑 API용)
 const SEARCH_QUERIES = {
@@ -90,6 +110,13 @@ function loadCatalog(productType) {
       if (Array.isArray(catalog.products)) {
         let touched = false;
         for (const product of catalog.products) {
+          if (Array.isArray(product?.stores)) {
+            for (const store of product.stores) {
+              if (normalizeStoredStore(store)) {
+                touched = true;
+              }
+            }
+          }
           const before = Number(product?.prices?.current) || 0;
           syncPriceFromStores(product);
           if ((Number(product?.prices?.current) || 0) !== before) {
@@ -176,6 +203,323 @@ function isUsableProductImage(url) {
   if (lower.includes('placehold.co')) return false;
   if (lower.includes('placeholder')) return false;
   return true;
+}
+
+function isHttpUrl(url) {
+  return /^https?:\/\//i.test(String(url || '').trim());
+}
+
+function normalizePlatformSource(source) {
+  const key = String(source || '').trim().toLowerCase();
+  if (PLATFORM_KEYS.includes(key)) return key;
+  if (key === '11번가') return '11st';
+  if (key === 'ssg닷컴') return 'ssg';
+  return 'unknown';
+}
+
+function normalizeStoreName(value, source = 'unknown') {
+  const text = String(value || '').trim();
+  if (text) return text;
+  return PLATFORM_LABELS[source] || '스토어';
+}
+
+function canonicalizeStoreUrl(url) {
+  const raw = String(url || '').trim();
+  if (!raw) return '';
+  try {
+    const parsed = new URL(raw);
+    const host = parsed.hostname.replace(/^www\./i, '').toLowerCase();
+    const pathname = parsed.pathname.replace(/\/+$/g, '');
+    const searchParams = new URLSearchParams(parsed.search);
+    [
+      'utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content',
+      'lptag', 'traceid', 'requestid', 'subid',
+    ].forEach((key) => searchParams.delete(key));
+    const query = searchParams.toString();
+    return `${host}${pathname}${query ? `?${query}` : ''}`.toLowerCase();
+  } catch {
+    return raw
+      .replace(/^https?:\/\//i, '')
+      .replace(/^www\./i, '')
+      .replace(/\/+$/g, '')
+      .toLowerCase();
+  }
+}
+
+function normalizeComparisonText(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/<[^>]*>/g, '')
+    .replace(/[^a-z0-9가-힣\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function tokenize(value) {
+  return normalizeComparisonText(value)
+    .split(' ')
+    .map((token) => token.trim())
+    .filter((token) => token.length >= 2);
+}
+
+function tokenOverlapRatio(a, b) {
+  const setA = new Set(tokenize(a));
+  const setB = new Set(tokenize(b));
+  if (setA.size === 0 || setB.size === 0) return 0;
+  let intersection = 0;
+  for (const token of setA) {
+    if (setB.has(token)) intersection += 1;
+  }
+  return intersection / Math.max(setA.size, setB.size);
+}
+
+function computeMatchScore(product, candidateTitle) {
+  const seed = `${product.name || ''} ${product.model || ''}`.trim();
+  const normalizedSeed = normalizeForComparison(seed);
+  const normalizedTitle = normalizeForComparison(candidateTitle);
+  const jaccard = similarity(normalizedSeed, normalizedTitle);
+  const overlap = tokenOverlapRatio(seed, candidateTitle);
+  const brand = String(product.brand || '').trim();
+  const brandBonus = brand && normalizeComparisonText(candidateTitle).includes(normalizeComparisonText(brand)) ? 0.08 : 0;
+  const weighted = (jaccard * 0.65) + (overlap * 0.35) + brandBonus;
+  return Math.max(0, Math.min(100, Math.round(weighted * 100)));
+}
+
+function getInternalApiBaseUrl() {
+  if (process.env.INTERNAL_API_BASE_URL) {
+    return String(process.env.INTERNAL_API_BASE_URL).replace(/\/+$/g, '');
+  }
+  const apiBase = String(process.env.API_BASE_URL || '').trim();
+  if (apiBase) {
+    return apiBase.replace(/\/+$/g, '');
+  }
+  const port = process.env.PORT || '3001';
+  return `http://127.0.0.1:${port}`;
+}
+
+async function fetchWithTimeout(url, timeoutMs = PLATFORM_ENRICH_TIMEOUT_MS) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function fetchAllPlatformSearchResults(productType, query) {
+  if (!ENABLE_ALL_PLATFORM_ENRICH) return [];
+  const safeQuery = String(query || '').trim();
+  if (!safeQuery) return [];
+
+  const baseUrl = getInternalApiBaseUrl();
+  const targetUrl = `${baseUrl}/api/search?query=${encodeURIComponent(safeQuery)}&type=${encodeURIComponent(productType)}&limit=${PLATFORM_ENRICH_RESULT_LIMIT}`;
+  try {
+    const response = await fetchWithTimeout(targetUrl);
+    if (!response.ok) return [];
+    const data = await response.json();
+    return Array.isArray(data) ? data : [];
+  } catch (err) {
+    console.error(`[ProductSync] 플랫폼 통합 검색 실패 (${productType}/${safeQuery}):`, err.message);
+    return [];
+  }
+}
+
+function buildStoreFromCandidate(source, candidate, product) {
+  const price = parseInt(String(candidate?.price || '').replace(/[^0-9]/g, ''), 10) || 0;
+  if (price <= 0) return null;
+  if (!isHttpUrl(candidate?.link)) return null;
+
+  const sourceKey = normalizePlatformSource(source);
+  const title = stripHtml(candidate?.title || '');
+  const matchScore = computeMatchScore(product, title);
+  if (matchScore < PLATFORM_MATCH_SCORE_THRESHOLD) return null;
+
+  const storeName = normalizeStoreName(candidate?.mallName, sourceKey);
+  const nowIso = new Date().toISOString();
+  return {
+    store: storeName,
+    storeLogo: getStoreLogo(storeName),
+    source: sourceKey,
+    collectedAt: nowIso,
+    matchScore,
+    price,
+    rawPrice: price,
+    shipping: 0,
+    deliveryDays: '2~3일',
+    updatedAt: getStoreUpdatedAt(),
+    url: candidate.link,
+    sourceUrl: candidate.link,
+    isLowest: false,
+    verificationStatus: 'stale',
+    verificationMethod: 'fallback',
+    verifiedPrice: 0,
+    verifiedAt: null,
+  };
+}
+
+function dedupeStores(stores) {
+  const byKey = new Map();
+
+  for (const store of stores) {
+    const normalizedStoreName = normalizeStoreName(store?.store, normalizePlatformSource(store?.source)).toLowerCase();
+    const canonicalUrl = canonicalizeStoreUrl(store?.sourceUrl || store?.url);
+    const key = `${normalizedStoreName}::${canonicalUrl}`;
+    const previous = byKey.get(key);
+
+    if (!previous) {
+      byKey.set(key, store);
+      continue;
+    }
+
+    const prevScore = Number(previous.matchScore) || 0;
+    const nextScore = Number(store.matchScore) || 0;
+    const prevPrice = Number(previous.price) || Number.MAX_SAFE_INTEGER;
+    const nextPrice = Number(store.price) || Number.MAX_SAFE_INTEGER;
+
+    if (nextScore > prevScore || (nextScore === prevScore && nextPrice < prevPrice)) {
+      byKey.set(key, { ...previous, ...store });
+    }
+  }
+
+  return Array.from(byKey.values());
+}
+
+function sortStoresByPriceAndScore(stores) {
+  stores.sort((a, b) => {
+    const priceDiff = (Number(a?.price) || 0) - (Number(b?.price) || 0);
+    if (priceDiff !== 0) return priceDiff;
+    return (Number(b?.matchScore) || 0) - (Number(a?.matchScore) || 0);
+  });
+}
+
+async function enrichStoresFromAllPlatforms(productType, product) {
+  if (!ENABLE_ALL_PLATFORM_ENRICH || !product) return 0;
+
+  const searchQuery = `${product.brand || ''} ${product.name || product.model || ''}`.trim();
+  if (!searchQuery) return 0;
+
+  const platformResults = await fetchAllPlatformSearchResults(productType, searchQuery);
+  if (!Array.isArray(platformResults) || platformResults.length === 0) return 0;
+
+  const candidateStores = [];
+  const priceRange = PRICE_RANGES[productType];
+
+  for (const platformResult of platformResults) {
+    const source = normalizePlatformSource(platformResult?.source);
+    if (source === 'unknown') continue;
+
+    const products = Array.isArray(platformResult?.products) ? platformResult.products : [];
+    const storesForSource = [];
+
+    for (const candidate of products) {
+      const mapped = buildStoreFromCandidate(source, candidate, product);
+      if (!mapped) continue;
+      if (mapped.price < priceRange.min || mapped.price > priceRange.max) continue;
+      storesForSource.push(mapped);
+    }
+
+    sortStoresByPriceAndScore(storesForSource);
+    candidateStores.push(...storesForSource.slice(0, PLATFORM_STORES_PER_SOURCE));
+  }
+
+  if (candidateStores.length === 0) return 0;
+
+  const beforeCount = Array.isArray(product.stores) ? product.stores.length : 0;
+  const merged = dedupeStores([...(Array.isArray(product.stores) ? product.stores : []), ...candidateStores]);
+  sortStoresByPriceAndScore(merged);
+  merged.forEach((store, index) => {
+    store.isLowest = index === 0;
+  });
+
+  product.stores = merged;
+  syncPriceFromStores(product);
+
+  return Math.max(0, merged.length - beforeCount);
+}
+
+async function processWithConcurrency(items, concurrency, worker) {
+  const poolSize = Math.max(1, Math.min(concurrency, items.length || 1));
+  const queue = [...items];
+  const workers = Array.from({ length: poolSize }, async () => {
+    while (queue.length > 0) {
+      const item = queue.shift();
+      if (!item) continue;
+      await worker(item);
+    }
+  });
+  await Promise.all(workers);
+}
+
+async function enrichCatalogStoresFromAllPlatforms(productType, products) {
+  if (!ENABLE_ALL_PLATFORM_ENRICH || !Array.isArray(products) || products.length === 0) {
+    return { checked: 0, enrichedProducts: 0, addedStores: 0 };
+  }
+
+  let checked = 0;
+  let enrichedProducts = 0;
+  let addedStores = 0;
+
+  await processWithConcurrency(products, PLATFORM_ENRICH_CONCURRENCY, async (product) => {
+    checked += 1;
+    try {
+      const added = await enrichStoresFromAllPlatforms(productType, product);
+      if (added > 0) {
+        enrichedProducts += 1;
+        addedStores += added;
+      }
+    } catch (err) {
+      console.error(`[ProductSync] 스토어 확장 실패 (${productType}/${product?.name || 'unknown'}):`, err.message);
+    }
+    await delay(80);
+  });
+
+  return { checked, enrichedProducts, addedStores };
+}
+
+function isCachedImageUrl(url) {
+  const value = String(url || '').trim();
+  if (!value) return false;
+  const publicBase = String(process.env.IMAGE_CACHE_PUBLIC_BASE_URL || '').trim().replace(/\/+$/g, '');
+  if (publicBase && value.startsWith(publicBase)) return true;
+  if (process.env.IMAGE_CACHE_S3_BUCKET && value.includes(process.env.IMAGE_CACHE_S3_BUCKET)) return true;
+  return false;
+}
+
+async function cachePrimaryProductImage(product, prefix) {
+  if (!isImageCacheEnabled()) return false;
+  if (!product || !Array.isArray(product.images) || product.images.length === 0) return false;
+
+  const primary = String(product.images[0] || '').trim();
+  if (!isUsableProductImage(primary) || isCachedImageUrl(primary)) return false;
+
+  const result = await cacheImageFromUrl(primary, { prefix });
+  if (!result.ok || !isUsableProductImage(result.url)) {
+    return false;
+  }
+
+  product.images[0] = result.url;
+  return true;
+}
+
+async function cacheProductImages(products, productType) {
+  if (!isImageCacheEnabled() || !Array.isArray(products) || products.length === 0) {
+    return { checked: 0, cached: 0 };
+  }
+
+  let checked = 0;
+  let cached = 0;
+  await processWithConcurrency(products, Math.min(4, PLATFORM_ENRICH_CONCURRENCY), async (product) => {
+    checked += 1;
+    try {
+      const ok = await cachePrimaryProductImage(product, `${productType}/thumb`);
+      if (ok) cached += 1;
+    } catch {
+      // ignore cache failures per item
+    }
+  });
+
+  return { checked, cached };
 }
 
 /**
@@ -275,11 +619,16 @@ function normalizeNaverProduct(item, productType, category) {
       {
         store: item.mallName || '네이버쇼핑',
         storeLogo: getStoreLogo(item.mallName),
+        source: 'naver',
+        collectedAt: new Date().toISOString(),
+        matchScore: 100,
         price,
+        rawPrice: price,
         shipping: 0,
         deliveryDays: '2~3일',
         updatedAt: getStoreUpdatedAt(),
         url: item.link || '',
+        sourceUrl: item.link || '',
         isLowest: true,
       },
     ],
@@ -401,27 +750,62 @@ function mergeProducts(existingProducts, newProducts) {
  * 스토어 정보 병합
  */
 function mergeStores(existing, newProduct) {
-  const newStore = newProduct.stores[0];
-  if (!newStore) return;
-
-  const existingStore = existing.stores.find(s => 
-    s.store === newStore.store || s.url === newStore.url
-  );
-
-  if (existingStore) {
-    existingStore.price = newStore.price;
-    existingStore.updatedAt = getStoreUpdatedAt();
-    existingStore.isLowest = false;
-  } else {
-    if (!newStore.updatedAt) {
-      newStore.updatedAt = getStoreUpdatedAt();
-    }
-    existing.stores.push(newStore);
+  const incomingStores = Array.isArray(newProduct?.stores) ? newProduct.stores : [];
+  if (!Array.isArray(existing.stores)) {
+    existing.stores = [];
   }
 
-  // 최저가 스토어 재계산
+  if (incomingStores.length === 0) return;
+
+  for (const newStoreRaw of incomingStores) {
+    if (!newStoreRaw) continue;
+    const newStore = { ...newStoreRaw };
+    const canonicalNewUrl = canonicalizeStoreUrl(newStore.sourceUrl || newStore.url);
+    const normalizedNewName = normalizeStoreName(newStore.store, normalizePlatformSource(newStore.source)).toLowerCase();
+
+    const existingStore = existing.stores.find((store) => {
+      const canonicalExistingUrl = canonicalizeStoreUrl(store.sourceUrl || store.url);
+      const normalizedExistingName = normalizeStoreName(store.store, normalizePlatformSource(store.source)).toLowerCase();
+      if (canonicalExistingUrl && canonicalNewUrl) {
+        return canonicalExistingUrl === canonicalNewUrl;
+      }
+      return normalizedExistingName === normalizedNewName;
+    });
+
+    if (existingStore) {
+      const merged = {
+        ...existingStore,
+        ...newStore,
+        source: normalizePlatformSource(newStore.source || existingStore.source),
+        store: normalizeStoreName(newStore.store || existingStore.store, normalizePlatformSource(newStore.source || existingStore.source)),
+        storeLogo: newStore.storeLogo || existingStore.storeLogo || getStoreLogo(newStore.store || existingStore.store),
+        price: Number(newStore.price) > 0 ? Number(newStore.price) : Number(existingStore.price) || 0,
+        rawPrice: Number(newStore.rawPrice) > 0 ? Number(newStore.rawPrice) : Number(newStore.price) || Number(existingStore.rawPrice) || Number(existingStore.price) || 0,
+        matchScore: Math.max(Number(existingStore.matchScore) || 0, Number(newStore.matchScore) || 0),
+        collectedAt: newStore.collectedAt || existingStore.collectedAt || getStoreUpdatedAt(),
+        updatedAt: getStoreUpdatedAt(),
+      };
+      Object.assign(existingStore, merged);
+    } else {
+      existing.stores.push({
+        ...newStore,
+        source: normalizePlatformSource(newStore.source),
+        store: normalizeStoreName(newStore.store, normalizePlatformSource(newStore.source)),
+        storeLogo: newStore.storeLogo || getStoreLogo(newStore.store),
+        rawPrice: Number(newStore.rawPrice) > 0 ? Number(newStore.rawPrice) : Number(newStore.price) || 0,
+        collectedAt: newStore.collectedAt || getStoreUpdatedAt(),
+        updatedAt: newStore.updatedAt || getStoreUpdatedAt(),
+        isLowest: false,
+      });
+    }
+  }
+
+  existing.stores = dedupeStores(existing.stores);
+  sortStoresByPriceAndScore(existing.stores);
   const lowestStore = findLowestStore(existing.stores);
-  existing.stores.forEach(s => { s.isLowest = !!lowestStore && s === lowestStore; });
+  existing.stores.forEach((store) => {
+    store.isLowest = !!lowestStore && store === lowestStore;
+  });
 }
 
 function findLowestStore(stores) {
@@ -497,6 +881,7 @@ function similarity(a, b) {
   const setB = new Set(b.split(''));
   const intersection = new Set([...setA].filter(x => setB.has(x)));
   const union = new Set([...setA, ...setB]);
+  if (union.size === 0) return 0;
   return intersection.size / union.size;
 }
 
@@ -601,14 +986,100 @@ function extractTags(title, productType) {
  */
 function getStoreLogo(mallName) {
   const logos = {
-    '쿠팡': '🛒', 'G마켓': '🛍️', '11번가': '🏪', '옥션': '🏷️',
-    '네이버': '🟢', 'SSG': '🔴', '롯데ON': '🟡',
+    '쿠팡': '🛒',
+    'G마켓': '🛍️',
+    '11번가': '🏪',
+    '옥션': '🏷️',
+    '네이버': '🟢',
+    '네이버쇼핑': '🟢',
+    'SSG': '🔴',
+    'SSG닷컴': '🔴',
+    '롯데ON': '🟡',
+    '다나와': '💻',
+    '에누리': '🧾',
+    '인터파크': '🎫',
   };
   return logos[mallName] || '🏪';
 }
 
 function getStoreUpdatedAt() {
   return new Date().toISOString();
+}
+
+function inferSourceFromStore(store) {
+  const raw = String(store?.source || '').trim().toLowerCase();
+  if (PLATFORM_KEYS.includes(raw)) return raw;
+
+  const storeName = String(store?.store || '').toLowerCase();
+  if (storeName.includes('쿠팡')) return 'coupang';
+  if (storeName.includes('네이버')) return 'naver';
+  if (storeName.includes('11')) return '11st';
+  if (storeName.includes('g마켓') || storeName.includes('gmarket')) return 'gmarket';
+  if (storeName.includes('옥션')) return 'auction';
+  if (storeName.includes('다나와')) return 'danawa';
+  if (storeName.includes('에누리')) return 'ennuri';
+  if (storeName.includes('ssg')) return 'ssg';
+  if (storeName.includes('롯데')) return 'lotteon';
+  if (storeName.includes('인터파크')) return 'interpark';
+
+  const url = String(store?.sourceUrl || store?.url || '').toLowerCase();
+  if (url.includes('coupang')) return 'coupang';
+  if (url.includes('naver')) return 'naver';
+  if (url.includes('11st')) return '11st';
+  if (url.includes('gmarket')) return 'gmarket';
+  if (url.includes('auction')) return 'auction';
+  if (url.includes('danawa')) return 'danawa';
+  if (url.includes('enuri')) return 'ennuri';
+  if (url.includes('ssg')) return 'ssg';
+  if (url.includes('lotteon')) return 'lotteon';
+  if (url.includes('interpark')) return 'interpark';
+  return 'unknown';
+}
+
+function normalizeStoredStore(store) {
+  if (!store || typeof store !== 'object') return false;
+  let changed = false;
+
+  const source = inferSourceFromStore(store);
+  if (store.source !== source) {
+    store.source = source;
+    changed = true;
+  }
+
+  if (!store.collectedAt) {
+    store.collectedAt = store.updatedAt || getStoreUpdatedAt();
+    changed = true;
+  }
+
+  const score = Number.isFinite(Number(store.matchScore)) ? Number(store.matchScore) : 0;
+  if (Number(store.matchScore) !== score) {
+    store.matchScore = score;
+    changed = true;
+  }
+
+  if (!store.sourceUrl && isHttpUrl(store.url)) {
+    store.sourceUrl = store.url;
+    changed = true;
+  }
+
+  if (!store.storeLogo) {
+    store.storeLogo = getStoreLogo(store.store);
+    changed = true;
+  }
+
+  const price = Number(store.price) || 0;
+  const rawPrice = Number(store.rawPrice) || price;
+  if (!store.rawPrice || Number(store.rawPrice) !== rawPrice) {
+    store.rawPrice = rawPrice;
+    changed = true;
+  }
+
+  if (!store.updatedAt) {
+    store.updatedAt = getStoreUpdatedAt();
+    changed = true;
+  }
+
+  return changed;
 }
 
 /**
@@ -706,8 +1177,20 @@ async function syncAll() {
     // 기존 + 신규 병합
     const { products, addedCount, updatedCount } = mergeProducts(existingProducts, allNewProducts);
 
+    // 전 플랫폼 가격 비교 스토어 확장
+    const enrichSummary = await enrichCatalogStoresFromAllPlatforms(productType, products);
+    if (enrichSummary.addedStores > 0) {
+      console.log(`    🔎 ${productType}: 스토어 확장 +${enrichSummary.addedStores} (제품 ${enrichSummary.enrichedProducts}/${enrichSummary.checked})`);
+    }
+
     // 어필리에이트 링크 보강
     enrichWithAffiliateLinks(products);
+
+    // 썸네일 외부 캐시 (선택)
+    const imageCacheSummary = await cacheProductImages(products, productType);
+    if (imageCacheSummary.cached > 0) {
+      console.log(`    🖼️ ${productType}: 이미지 캐시 ${imageCacheSummary.cached}/${imageCacheSummary.checked}`);
+    }
 
     // 가격순 정렬
     products.sort((a, b) => b.discount.percent - a.discount.percent);
@@ -766,6 +1249,18 @@ async function syncProductType(productType) {
   }
 
   const { products, addedCount, updatedCount } = mergeProducts(existingProducts, allNewProducts);
+
+  const enrichSummary = await enrichCatalogStoresFromAllPlatforms(productType, products);
+  if (enrichSummary.addedStores > 0) {
+    console.log(`[ProductSync] ${productType}: 스토어 확장 +${enrichSummary.addedStores}`);
+  }
+
+  enrichWithAffiliateLinks(products);
+  const imageCacheSummary = await cacheProductImages(products, productType);
+  if (imageCacheSummary.cached > 0) {
+    console.log(`[ProductSync] ${productType}: 이미지 캐시 ${imageCacheSummary.cached}/${imageCacheSummary.checked}`);
+  }
+
   products.sort((a, b) => b.discount.percent - a.discount.percent);
 
   saveCatalog(productType, {
@@ -809,6 +1304,7 @@ async function healImages(productType) {
       const firstValidImage = items.find((x) => isUsableProductImage(x.image))?.image || '';
       if (firstValidImage) {
         product.images = [firstValidImage];
+        await cachePrimaryProductImage(product, `${productType}/thumb`);
         product._lastUpdated = new Date().toISOString();
         updatedCount++;
         console.log(`[HealImages] ✅ ${product.name} → ${firstValidImage.substring(0, 60)}...`);
@@ -849,8 +1345,15 @@ async function searchProductImage(productName) {
   const items = await fetchFromNaver(productName, 3);
   const firstValidImage = items.find((x) => isUsableProductImage(x.image));
   if (firstValidImage) {
+    let image = firstValidImage.image;
+    if (isImageCacheEnabled()) {
+      const cached = await cacheImageFromUrl(image, { prefix: 'search/thumb' });
+      if (cached.ok && isUsableProductImage(cached.url)) {
+        image = cached.url;
+      }
+    }
     return {
-      image: firstValidImage.image,
+      image,
       source: 'naver',
       title: stripHtml(firstValidImage.title),
     };

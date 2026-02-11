@@ -305,6 +305,7 @@ const normalizeProductsForUi = (productType: ProductType, products: Product[]): 
 
 interface ProductsResponse {
   type: string;
+  storeVisibility?: 'all' | 'verified';
   total: number;
   verifiedOnly?: boolean;
   lastSync: string | null;
@@ -339,6 +340,7 @@ export function useProducts<T extends Product = Product>(
     category?: string;
     enabled?: boolean;
     verifiedOnly?: boolean;
+    storeVisibility?: 'all' | 'verified';
   }
 ): UseProductsResult<T> {
   const [products, setProducts] = useState<T[]>([]);
@@ -349,7 +351,9 @@ export function useProducts<T extends Product = Product>(
   const [error, setError] = useState<string | null>(null);
   const [refreshVersion, setRefreshVersion] = useState(0);
 
-  const { category, enabled = true, verifiedOnly = true } = options || {};
+  const { category, enabled = true, verifiedOnly, storeVisibility } = options || {};
+  const resolvedStoreVisibility: 'all' | 'verified' = storeVisibility
+    || (typeof verifiedOnly === 'boolean' ? (verifiedOnly ? 'verified' : 'all') : 'all');
 
   // 정적 데이터 fallback
   const getStaticData = useCallback((): T[] => {
@@ -364,7 +368,7 @@ export function useProducts<T extends Product = Product>(
   // 로컬 캐시 확인
   const getCachedProducts = useCallback((): ProductsResponse | null => {
     try {
-      const cacheKey = `${CACHE_KEY_PREFIX}${productType}_${category || 'all'}_${verifiedOnly ? 'verified' : 'all'}`;
+      const cacheKey = `${CACHE_KEY_PREFIX}${productType}_${category || 'all'}_${resolvedStoreVisibility}`;
       const cached = sessionStorage.getItem(cacheKey);
       if (!cached) return null;
       
@@ -377,15 +381,15 @@ export function useProducts<T extends Product = Product>(
     } catch {
       return null;
     }
-  }, [productType, category, verifiedOnly]);
+  }, [productType, category, resolvedStoreVisibility]);
 
   // 캐시 저장
   const setCachedProducts = useCallback((data: ProductsResponse) => {
     try {
-      const cacheKey = `${CACHE_KEY_PREFIX}${productType}_${category || 'all'}_${verifiedOnly ? 'verified' : 'all'}`;
+      const cacheKey = `${CACHE_KEY_PREFIX}${productType}_${category || 'all'}_${resolvedStoreVisibility}`;
       sessionStorage.setItem(cacheKey, JSON.stringify({ data, timestamp: Date.now() }));
     } catch { /* sessionStorage 꽉 찬 경우 무시 */ }
-  }, [productType, category, verifiedOnly]);
+  }, [productType, category, resolvedStoreVisibility]);
 
   // API에서 상품 로드
   useEffect(() => {
@@ -418,7 +422,10 @@ export function useProducts<T extends Product = Product>(
       try {
         const params = new URLSearchParams({ type: productType, limit: '200' });
         if (category) params.set('category', category);
-        params.set('verifiedOnly', String(verifiedOnly));
+        params.set('storeVisibility', resolvedStoreVisibility);
+        if (typeof verifiedOnly === 'boolean') {
+          params.set('verifiedOnly', String(verifiedOnly));
+        }
         
         const response = await fetch(`${API_BASE}/api/products?${params}`, {
           signal: controller.signal,
@@ -468,16 +475,16 @@ export function useProducts<T extends Product = Product>(
     fetchProducts();
 
     return () => { cancelled = true; };
-  }, [productType, category, enabled, refreshVersion, verifiedOnly, getCachedProducts, setCachedProducts, getStaticData]);
+  }, [productType, category, enabled, refreshVersion, verifiedOnly, resolvedStoreVisibility, getCachedProducts, setCachedProducts, getStaticData]);
 
   const refresh = useCallback(() => {
     // 캐시 클리어 후 재로드
     try {
-      const cacheKey = `${CACHE_KEY_PREFIX}${productType}_${category || 'all'}_${verifiedOnly ? 'verified' : 'all'}`;
+      const cacheKey = `${CACHE_KEY_PREFIX}${productType}_${category || 'all'}_${resolvedStoreVisibility}`;
       sessionStorage.removeItem(cacheKey);
     } catch { /* ignore */ }
     setRefreshVersion(v => v + 1);
-  }, [productType, category, verifiedOnly]);
+  }, [productType, category, resolvedStoreVisibility]);
 
   return { products, isLoading, isFromApi, lastSync, totalCount, error, refresh };
 }

@@ -61,15 +61,15 @@ router.get('/:offerId', async (req, res) => {
   try {
     const result = isClickTimeVerifyEnabled()
       ? await withTimeout(
-          enqueueOfferVerification(offerId, { trigger: 'click', force: true }),
+          enqueueOfferVerification(offerId, { trigger: 'click', force: true, allowUnverifiedRedirect: true }),
           timeoutMs,
         )
       : await withTimeout(
-          verifyOfferById(offerId, { trigger: 'click', force: false }),
+          verifyOfferById(offerId, { trigger: 'click', force: false, allowUnverifiedRedirect: true }),
           timeoutMs,
         );
 
-    if (!result?.ok || !result?.redirectUrl) {
+    if (!result?.redirectUrl) {
       const message = '현재 가격 검증 실패, 잠시 후 재시도해주세요.';
       if (wantsHtml(req)) {
         return res.status(409).type('html').send(renderVerificationFailHtml(message, offerId));

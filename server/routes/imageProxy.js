@@ -4,6 +4,7 @@ const router = express.Router();
 const DEFAULT_ALLOWED_HOSTS = ['shopping-phinf.pstatic.net'];
 const MAX_IMAGE_BYTES = parseInt(process.env.IMAGE_PROXY_MAX_BYTES || `${8 * 1024 * 1024}`, 10);
 const CACHE_SECONDS = parseInt(process.env.IMAGE_PROXY_CACHE_SECONDS || '86400', 10);
+const FETCH_TIMEOUT_MS = parseInt(process.env.IMAGE_PROXY_TIMEOUT_MS || '5000', 10);
 
 function getAllowedHosts() {
   const env = process.env.IMAGE_PROXY_ALLOWED_HOSTS;
@@ -40,12 +41,20 @@ router.get('/', async (req, res) => {
   }
 
   try {
-    const upstream = await fetch(parsed.toString(), {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (compatible; LapPriceImageProxy/1.0)',
-        'Accept': 'image/avif,image/webp,image/*,*/*;q=0.8',
-      },
-    });
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+    let upstream;
+    try {
+      upstream = await fetch(parsed.toString(), {
+        signal: controller.signal,
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (compatible; LapPriceImageProxy/1.0)',
+          'Accept': 'image/avif,image/webp,image/*,*/*;q=0.8',
+        },
+      });
+    } finally {
+      clearTimeout(timeout);
+    }
 
     if (!upstream.ok) {
       return res.status(upstream.status).json({ error: `upstream 오류: ${upstream.status}` });

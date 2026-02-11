@@ -5,6 +5,9 @@ export type ProductType = 'laptop' | 'monitor' | 'desktop';
 export interface StorePrice {
   store: string;
   storeLogo: string;
+  source?: 'naver' | 'coupang' | '11st' | 'gmarket' | 'auction' | 'danawa' | 'ennuri' | 'ssg' | 'lotteon' | 'interpark' | 'unknown';
+  collectedAt?: string | null;
+  matchScore?: number;
   price: number;
   rawPrice?: number;
   verifiedPrice?: number;

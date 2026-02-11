@@ -88,14 +88,9 @@ export default function ProductCard({
     return { label: '고점 주의', sublabel: '기다리세요', color: 'bg-rose-50 text-rose-600 dark:bg-rose-900/20 dark:text-rose-400', icon: '⚠️' };
   }, [laptop.prices]);
 
-  // 검증 스토어 우선 렌더링(정적 fallback 데이터는 기존 동작 유지)
+  // 전체 스토어 노출 (가격 오름차순)
   const sortedStores = useMemo(() => {
-    const hasVerificationState = laptop.stores.some((store) => !!store.verificationStatus);
-    const baseStores = hasVerificationState
-      ? laptop.stores.filter((store) => store.verificationStatus === 'verified' && store.isActive !== false)
-      : laptop.stores;
-
-    return [...baseStores].sort((a, b) => getStoreVerifiedPrice(a) - getStoreVerifiedPrice(b));
+    return [...laptop.stores].sort((a, b) => getStoreVerifiedPrice(a) - getStoreVerifiedPrice(b));
   }, [laptop.stores]);
 
   // 원본 URL 배열에서 쿠팡 URL만 어필리에이트 변환
@@ -441,7 +436,7 @@ export default function ProductCard({
             })}
           </div>
           <p className="text-[10px] text-slate-400 mb-2">
-            검증 완료된 가격만 표시됩니다. 클릭 시 최신가를 다시 확인합니다.
+            수집된 스토어 가격을 모두 표시합니다. 클릭 시 최신가를 다시 확인합니다.
           </p>
 
           {/* Expand Button */}

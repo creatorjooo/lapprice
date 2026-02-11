@@ -496,14 +496,9 @@ function MonitorProductCard({
     ? (apiPriceHistory.length > 0 ? apiPriceHistory : staticPriceHistory)
     : [{ date: '오늘', price: monitor.prices.current, store: '현재가' }];
 
-  // 검증 스토어 우선(정적 fallback은 기존 전체 노출)
+  // 전체 스토어 노출 (가격 오름차순)
   const sortedStores = useMemo(() => {
-    const hasVerificationState = monitor.stores.some((store) => !!store.verificationStatus);
-    const baseStores = hasVerificationState
-      ? monitor.stores.filter((store) => store.verificationStatus === 'verified' && store.isActive !== false)
-      : monitor.stores;
-
-    return [...baseStores].sort((a, b) => getStoreVerifiedPrice(a) - getStoreVerifiedPrice(b));
+    return [...monitor.stores].sort((a, b) => getStoreVerifiedPrice(a) - getStoreVerifiedPrice(b));
   }, [monitor.stores]);
 
   const storeUrls = useMemo(() => sortedStores.map((store) => getStoreTrackingUrl(store)), [sortedStores]);
@@ -707,7 +702,7 @@ function MonitorProductCard({
           })}
         </div>
         <p className="text-[10px] text-slate-400 mb-2">
-          검증 완료된 가격만 노출되며, 클릭 시 최신가를 다시 확인합니다.
+          수집된 스토어 가격을 모두 표시합니다. 클릭 시 최신가를 다시 확인합니다.
         </p>
 
         {sortedStores.length > 2 && (

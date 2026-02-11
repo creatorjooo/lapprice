@@ -45,7 +45,7 @@ services:
         value: "24"
       # 가격 검증 파이프라인
       - key: VERIFIED_ONLY_MODE
-        value: "true"
+        value: "false"
       - key: CLICK_TIME_VERIFY
         value: "true"
       - key: VERIFICATION_STALE_MINUTES
@@ -56,3 +56,31 @@ services:
         value: "120"
       - key: COUPANG_VERIFY_MIN_INTERVAL_MS
         value: "120"
+      # 전 플랫폼 스토어 확장
+      - key: ENABLE_ALL_PLATFORM_ENRICH
+        value: "true"
+      - key: PLATFORM_ENRICH_RESULT_LIMIT
+        value: "12"
+      - key: PLATFORM_STORES_PER_SOURCE
+        value: "2"
+      - key: PLATFORM_MATCH_SCORE_THRESHOLD
+        value: "58"
+      - key: PLATFORM_ENRICH_TIMEOUT_MS
+        value: "12000"
+      - key: PLATFORM_ENRICH_CONCURRENCY
+        value: "3"
+      # 썸네일 외부 캐시 (선택)
+      - key: IMAGE_CACHE_PROVIDER
+        sync: false
+      - key: IMAGE_CACHE_S3_ENDPOINT
+        sync: false
+      - key: IMAGE_CACHE_S3_BUCKET
+        sync: false
+      - key: IMAGE_CACHE_S3_REGION
+        value: "auto"
+      - key: IMAGE_CACHE_S3_ACCESS_KEY
+        sync: false
+      - key: IMAGE_CACHE_S3_SECRET_KEY
+        sync: false
+      - key: IMAGE_CACHE_PUBLIC_BASE_URL
+        sync: false

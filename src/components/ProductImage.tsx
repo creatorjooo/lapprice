@@ -13,21 +13,49 @@ export default function ProductImage({ src, alt, className, fallbackText }: Prod
   const normalizedSrc = useMemo(() => String(src || '').trim(), [src]);
   const canProxy = useMemo(() => isProxyCandidate(normalizedSrc), [normalizedSrc]);
   const proxySrc = useMemo(() => (canProxy ? toImageProxySrc(normalizedSrc) : ''), [canProxy, normalizedSrc]);
+  const primarySrc = useMemo(() => {
+    if (!normalizedSrc) return '';
+    if (normalizedSrc.startsWith('/api/image-proxy')) return normalizedSrc;
+    return proxySrc || normalizedSrc;
+  }, [normalizedSrc, proxySrc]);
+  const secondarySrc = useMemo(() => {
+    if (!normalizedSrc) return '';
+    if (primarySrc === proxySrc && normalizedSrc !== proxySrc) return normalizedSrc;
+    if (primarySrc === normalizedSrc && proxySrc && proxySrc !== normalizedSrc) return proxySrc;
+    return '';
+  }, [normalizedSrc, primarySrc, proxySrc]);
 
-  const [imgSrc, setImgSrc] = useState(normalizedSrc);
-  const [usedProxy, setUsedProxy] = useState(false);
+  const [imgSrc, setImgSrc] = useState(primarySrc);
+  const [usedSecondary, setUsedSecondary] = useState(false);
   const [hasError, setHasError] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    setImgSrc(normalizedSrc);
-    setUsedProxy(false);
+    setImgSrc(primarySrc);
+    setUsedSecondary(false);
     setHasError(false);
     setIsLoading(true);
-  }, [normalizedSrc]);
+  }, [primarySrc]);
+
+  useEffect(() => {
+    if (!isLoading || !imgSrc) return;
+    const timer = window.setTimeout(() => {
+      if (!usedSecondary && secondarySrc && imgSrc !== secondarySrc) {
+        setUsedSecondary(true);
+        setImgSrc(secondarySrc);
+        setIsLoading(true);
+        return;
+      }
+      setHasError(true);
+      setIsLoading(false);
+    }, 3000);
+    return () => window.clearTimeout(timer);
+  }, [imgSrc, isLoading, secondarySrc, usedSecondary]);
 
   // 로컬 경로/placeholder는 즉시 fallback
-  const isLocalPath = normalizedSrc.startsWith('/') && !normalizedSrc.startsWith('//');
+  const isLocalPath = normalizedSrc.startsWith('/')
+    && !normalizedSrc.startsWith('//')
+    && !normalizedSrc.startsWith('/api/image-proxy');
   const isPlaceholder = normalizedSrc.toLowerCase().includes('placehold.co') || normalizedSrc.toLowerCase().includes('placeholder');
   const showFallback = hasError || !normalizedSrc || isLocalPath || isPlaceholder;
 
@@ -58,10 +86,10 @@ export default function ProductImage({ src, alt, className, fallbackText }: Prod
         referrerPolicy="no-referrer"
         onLoad={() => setIsLoading(false)}
         onError={() => {
-          if (!usedProxy && canProxy && proxySrc && imgSrc !== proxySrc) {
-            setUsedProxy(true);
+          if (!usedSecondary && secondarySrc && imgSrc !== secondarySrc) {
+            setUsedSecondary(true);
             setIsLoading(true);
-            setImgSrc(proxySrc);
+            setImgSrc(secondarySrc);
             return;
           }
           setHasError(true);
