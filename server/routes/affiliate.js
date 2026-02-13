@@ -4,6 +4,7 @@ const router = express.Router();
 const { getCachedResult, setCachedResult } = require('../utils/helpers');
 const { buildCoupangAuthorization } = require('../utils/coupangAuth');
 const { takeToken, setCooldownUntil } = require('../services/deeplinkRateLimiter');
+const { saveOfferAffiliateUrl } = require('../services/offerVerification');
 
 const DEEPLINK_CACHE_TTL = parseInt(process.env.DEEPLINK_CACHE_TTL || '86400', 10);
 const DEEPLINK_FAIL_COOLDOWN_MS = parseInt(process.env.DEEPLINK_FAIL_COOLDOWN_MS || '900000', 10);
@@ -232,7 +233,7 @@ router.post('/deeplink', async (req, res) => {
  * GET /api/affiliate/convert?url=https://www.coupang.com/...&subId=lapprice
  */
 router.get('/convert', async (req, res) => {
-  const { url, subId } = req.query;
+  const { url, subId, offerId } = req.query;
   const targetUrl = String(url || '').trim();
   if (!targetUrl) {
     return res.status(400).json({ error: 'URL이 필요합니다.' });
@@ -273,14 +274,18 @@ router.get('/convert', async (req, res) => {
   try {
     const deeplinkData = await callCoupangDeeplinkApi([targetUrl], subId);
     const deeplink = deeplinkData[0];
+    const affiliateUrl = deeplink?.landingUrl || targetUrl;
     const result = {
       mode: 'deeplink',
       originalUrl: targetUrl,
-      affiliateUrl: deeplink?.landingUrl || targetUrl,
-      shortenUrl: deeplink?.shortenUrl || deeplink?.landingUrl || targetUrl,
+      affiliateUrl,
+      shortenUrl: deeplink?.shortenUrl || affiliateUrl,
     };
 
     setCachedResult(cacheKey, result, DEEPLINK_CACHE_TTL);
+    if (offerId && affiliateUrl !== targetUrl) {
+      try { saveOfferAffiliateUrl(String(offerId), affiliateUrl); } catch (_) { /* ignore */ }
+    }
     return res.json(result);
   } catch (err) {
     const msg = (err && err.message) ? err.message : 'unknown error';
@@ -323,3 +328,4 @@ router.get('/convert', async (req, res) => {
 });
 
 module.exports = router;
+module.exports.callCoupangDeeplinkApi = callCoupangDeeplinkApi;

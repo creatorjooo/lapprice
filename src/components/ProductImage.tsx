@@ -52,12 +52,9 @@ export default function ProductImage({ src, alt, className, fallbackText }: Prod
     return () => window.clearTimeout(timer);
   }, [imgSrc, isLoading, secondarySrc, usedSecondary]);
 
-  // 로컬 경로/placeholder는 즉시 fallback
-  const isLocalPath = normalizedSrc.startsWith('/')
-    && !normalizedSrc.startsWith('//')
-    && !normalizedSrc.startsWith('/api/image-proxy');
+  // placeholder는 즉시 fallback
   const isPlaceholder = normalizedSrc.toLowerCase().includes('placehold.co') || normalizedSrc.toLowerCase().includes('placeholder');
-  const showFallback = hasError || !normalizedSrc || isLocalPath || isPlaceholder;
+  const showFallback = hasError || !normalizedSrc || isPlaceholder;
 
   if (showFallback) {
     return (

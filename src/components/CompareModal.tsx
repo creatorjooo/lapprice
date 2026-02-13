@@ -11,8 +11,10 @@ import { Badge } from '@/components/ui/badge';
 import type { Product } from '@/types';
 import { cn } from '@/lib/utils';
 import { useAffiliateBatch, isCoupangUrl } from '@/hooks/useAffiliateLink';
+import { useVerifiedRedirect } from '@/hooks/useVerifiedRedirect';
 import { trackAffiliateClick, getPlatformKey, isAffiliatePlatform } from '@/utils/tracking';
 import { toImageSrc } from '@/utils/image';
+import { getStoreHref, getStoreSortPrice, getStoreTrackingUrl, getStoreVerifiedPrice } from '@/utils/offers';
 
 interface CompareModalProps {
   isOpen: boolean;
@@ -34,9 +36,15 @@ export default function CompareModal({
   }
 
   const getLowestStore = (product: Product) => {
+    if (!Array.isArray(product.stores) || product.stores.length === 0) return null;
+    const verifiedFresh = product.stores
+      .filter((store) => (store.priceState === 'verified_fresh' || store.price_state === 'verified_fresh') && Number(store.displayPrice ?? store.display_price) > 0)
+      .sort((a, b) => getStoreSortPrice(a) - getStoreSortPrice(b));
+    if (verifiedFresh.length > 0) return verifiedFresh[0];
+
     const explicitLowest = product.stores.find((s) => s.isLowest);
     if (explicitLowest) return explicitLowest;
-    return product.stores.reduce((min, s) => (s.price < min.price ? s : min), product.stores[0]);
+    return product.stores.reduce((min, s) => (getStoreSortPrice(s) < getStoreSortPrice(min) ? s : min), product.stores[0]);
   };
 
   const getTypeLabel = (product: Product) => {
@@ -70,7 +78,7 @@ export default function CompareModal({
     )},
     { label: '가격', key: 'price', render: (product: Product) => (
       <div>
-        <p className="text-lg font-bold">{product.prices.current.toLocaleString()}원</p>
+        <p className="text-lg font-bold">{product.prices.current > 0 ? `${product.prices.current.toLocaleString()}원` : '가격 확인 필요'}</p>
         {product.discount.percent > 0 && (
           <p className="text-sm text-slate-400 line-through">{product.prices.original.toLocaleString()}원</p>
         )}
@@ -100,14 +108,22 @@ export default function CompareModal({
       </div>
     )},
     { label: '최저가 매장', key: 'store', render: (product: Product) => (
-      <div>
-        <p className="text-sm font-medium flex items-center gap-1">
-          {getLowestStore(product).store}
-          <Badge className="bg-emerald-500/10 text-emerald-700 text-[9px] px-1 py-0 h-4">최저가</Badge>
-        </p>
-        <p className="text-xs text-slate-400">{getLowestStore(product).deliveryDays}</p>
-        <p className="text-xs font-semibold">{getLowestStore(product).price.toLocaleString()}원</p>
-      </div>
+      (() => {
+        const lowestStore = getLowestStore(product);
+        if (!lowestStore) {
+          return <p className="text-xs text-slate-400">스토어 정보 없음</p>;
+        }
+        return (
+          <div>
+            <p className="text-sm font-medium flex items-center gap-1">
+              {lowestStore.store}
+              <Badge className="bg-emerald-500/10 text-emerald-700 text-[9px] px-1 py-0 h-4">최저가</Badge>
+            </p>
+            <p className="text-xs text-slate-400">{lowestStore.deliveryDays}</p>
+            <p className="text-xs font-semibold">{getStoreVerifiedPrice(lowestStore).toLocaleString()}원</p>
+          </div>
+        );
+      })()
     )},
   ];
 
@@ -217,46 +233,71 @@ export default function CompareModal({
 
 // ─── 어필리에이트 구매 버튼 컴포넌트 ───
 function CompareActionButtons({ products }: { products: Product[] }) {
+  const { openVerifiedLink, redirectError, clearRedirectError } = useVerifiedRedirect();
   const bestStores = products.map((product) => {
-    const affStore = product.stores.find((s) => isAffiliatePlatform(s.store) || isCoupangUrl(s.url));
-    return affStore || product.stores[0];
+    const sorted = [...(product.stores || [])].sort((a, b) => getStoreSortPrice(a) - getStoreSortPrice(b));
+    const verifiedStore = sorted.find((store) => (
+      (store.priceState === 'verified_fresh' || store.price_state === 'verified_fresh')
+      && !!getStoreHref(store)
+    ));
+    return verifiedStore || sorted.find((store) => !!getStoreHref(store)) || sorted[0];
   });
-  const urls = bestStores.map((s) => s.url);
-  const { affiliateUrls } = useAffiliateBatch(urls, 'compare_modal');
+  const trackingUrls = bestStores.map((store) => (store ? (getStoreTrackingUrl(store) || getStoreHref(store)) : ''));
+  const { affiliateUrls } = useAffiliateBatch(trackingUrls, 'compare_modal');
 
   return (
-    <div
-      className="grid gap-4 mt-6 pt-6 border-t"
-      style={{ gridTemplateColumns: `120px repeat(${products.length}, minmax(200px, 1fr))` }}
-    >
-      <div />
-      {products.map((product, idx) => {
-        const store = bestStores[idx];
-        const url = affiliateUrls[idx] || store.url;
-        const isAff = isAffiliatePlatform(store.store) || isCoupangUrl(store.url);
-        return (
-          <Button key={product.id} className="w-full" asChild>
-            <a
-              href={url}
-              target="_blank"
-              rel="noopener noreferrer"
-              onClick={() => {
+    <>
+      <div
+        className="grid gap-4 mt-6 pt-6 border-t"
+        style={{ gridTemplateColumns: `120px repeat(${products.length}, minmax(200px, 1fr))` }}
+      >
+        <div />
+        {products.map((product, idx) => {
+          const store = bestStores[idx];
+          if (!store) {
+            return (
+              <Button key={product.id} className="w-full" disabled>
+                연결 가능한 스토어 없음
+              </Button>
+            );
+          }
+
+          const baseHref = getStoreHref(store);
+          const trackingUrl = getStoreTrackingUrl(store) || baseHref;
+          const targetUrl = baseHref.startsWith('/r/')
+            ? baseHref
+            : (affiliateUrls[idx] || baseHref);
+          const isAff = isAffiliatePlatform(store.store) || isCoupangUrl(trackingUrl);
+          const isDisabled = !targetUrl;
+
+          return (
+            <Button
+              key={product.id}
+              className="w-full"
+              disabled={isDisabled}
+              onClick={async () => {
+                if (isDisabled) return;
+                clearRedirectError();
                 trackAffiliateClick({
                   productId: product.id,
                   platform: getPlatformKey(store.store),
                   source: 'compare_modal',
-                  url,
+                  url: trackingUrl,
                   productName: product.name,
                 });
+                await openVerifiedLink(targetUrl, store.offerId);
               }}
             >
               {store.store} 구매하기
               {isAff && <span className="ml-1 text-[9px] bg-white/20 px-1 rounded">제휴</span>}
               <ExternalLink className="w-3 h-3 ml-1 opacity-60" />
-            </a>
-          </Button>
-        );
-      })}
-    </div>
+            </Button>
+          );
+        })}
+      </div>
+      {redirectError && (
+        <p className="mt-3 text-xs text-rose-600">{redirectError}</p>
+      )}
+    </>
   );
 }

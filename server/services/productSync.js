@@ -36,7 +36,7 @@ const PLATFORM_LABELS = {
 const ENABLE_ALL_PLATFORM_ENRICH = process.env.ENABLE_ALL_PLATFORM_ENRICH !== 'false';
 const PLATFORM_ENRICH_TIMEOUT_MS = Math.max(3000, parseInt(process.env.PLATFORM_ENRICH_TIMEOUT_MS || '12000', 10) || 12000);
 const PLATFORM_ENRICH_RESULT_LIMIT = Math.max(5, Math.min(30, parseInt(process.env.PLATFORM_ENRICH_RESULT_LIMIT || '12', 10) || 12));
-const PLATFORM_MATCH_SCORE_THRESHOLD = Math.max(0, Math.min(100, parseInt(process.env.PLATFORM_MATCH_SCORE_THRESHOLD || '58', 10) || 58));
+const PLATFORM_MATCH_SCORE_THRESHOLD = Math.max(0, Math.min(100, parseInt(process.env.PLATFORM_MATCH_SCORE_THRESHOLD || '45', 10) || 45));
 const PLATFORM_STORES_PER_SOURCE = Math.max(1, Math.min(3, parseInt(process.env.PLATFORM_STORES_PER_SOURCE || '2', 10) || 2));
 const PLATFORM_ENRICH_CONCURRENCY = Math.max(1, Math.min(8, parseInt(process.env.PLATFORM_ENRICH_CONCURRENCY || '3', 10) || 3));
 const NAVER_FETCH_TIMEOUT_MS = Math.max(3000, parseInt(process.env.NAVER_FETCH_TIMEOUT_MS || '12000', 10) || 12000);
@@ -247,6 +247,82 @@ function canonicalizeStoreUrl(url) {
   }
 }
 
+function isLikelySearchStoreUrl(url) {
+  const raw = String(url || '').trim();
+  if (!isHttpUrl(raw)) return false;
+
+  try {
+    const parsed = new URL(raw);
+    const host = parsed.hostname.replace(/^www\./i, '').toLowerCase();
+    const pathname = parsed.pathname.toLowerCase();
+    const queryKeys = [...parsed.searchParams.keys()].map((key) => String(key || '').toLowerCase());
+
+    if (queryKeys.some((key) => ['q', 'query', 'keyword', 'k', 'search', 'sort', 'page', 'pagingindex'].includes(key))) {
+      return true;
+    }
+
+    if (host.includes('search.shopping.naver.com') && pathname.includes('/search/')) return true;
+    if (host.endsWith('coupang.com') && pathname.startsWith('/np/search')) return true;
+    if (host.endsWith('11st.co.kr') && pathname.includes('/search')) return true;
+    if (host.endsWith('gmarket.co.kr') && (pathname.includes('/search') || pathname.includes('/n/list'))) return true;
+    if (host.endsWith('auction.co.kr') && (pathname.includes('/search') || pathname.includes('/n/list'))) return true;
+    if (host.endsWith('danawa.com') && pathname.includes('/search')) return true;
+    if (host.endsWith('enuri.com') && pathname.includes('/search')) return true;
+    if (host.endsWith('ssg.com') && pathname.includes('/search')) return true;
+    if (host.endsWith('lotteon.com') && pathname.includes('/search')) return true;
+    if (host.endsWith('interpark.com') && pathname.includes('/search')) return true;
+
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+function getStoreUrlQuality(url) {
+  if (!isHttpUrl(url)) return 'invalid';
+  return isLikelySearchStoreUrl(url) ? 'search' : 'pdp';
+}
+
+function enrichStoreUrlMetadata(store) {
+  if (!store || typeof store !== 'object') return false;
+  let changed = false;
+
+  const sourceUrl = isHttpUrl(store.sourceUrl)
+    ? String(store.sourceUrl).trim()
+    : (isHttpUrl(store.url) ? String(store.url).trim() : '');
+  if ((store.sourceUrl || '') !== sourceUrl) {
+    store.sourceUrl = sourceUrl;
+    changed = true;
+  }
+
+  const sourceQuality = getStoreUrlQuality(sourceUrl);
+  const pdpUrl = sourceQuality === 'pdp' ? sourceUrl : '';
+  if ((store.pdpUrl || '') !== pdpUrl) {
+    store.pdpUrl = pdpUrl;
+    changed = true;
+  }
+
+  const canonicalUrl = canonicalizeStoreUrl(pdpUrl || sourceUrl);
+  if ((store.canonicalUrl || '') !== canonicalUrl) {
+    store.canonicalUrl = canonicalUrl;
+    changed = true;
+  }
+
+  const isPdpUrl = !!pdpUrl;
+  if (Boolean(store.isPdpUrl) !== isPdpUrl) {
+    store.isPdpUrl = isPdpUrl;
+    changed = true;
+  }
+
+  const urlQuality = sourceQuality;
+  if ((store.urlQuality || '') !== urlQuality) {
+    store.urlQuality = urlQuality;
+    changed = true;
+  }
+
+  return changed;
+}
+
 function normalizeComparisonText(value) {
   return String(value || '')
     .toLowerCase()
@@ -338,7 +414,7 @@ function buildStoreFromCandidate(source, candidate, product) {
 
   const storeName = normalizeStoreName(candidate?.mallName, sourceKey);
   const nowIso = new Date().toISOString();
-  return {
+  const mappedStore = {
     store: storeName,
     storeLogo: getStoreLogo(storeName),
     source: sourceKey,
@@ -357,15 +433,19 @@ function buildStoreFromCandidate(source, candidate, product) {
     verifiedPrice: 0,
     verifiedAt: null,
   };
+  enrichStoreUrlMetadata(mappedStore);
+  return mappedStore;
 }
 
 function dedupeStores(stores) {
   const byKey = new Map();
+  const urlQualityRank = { pdp: 2, search: 1, invalid: 0 };
 
   for (const store of stores) {
+    enrichStoreUrlMetadata(store);
     const normalizedStoreName = normalizeStoreName(store?.store, normalizePlatformSource(store?.source)).toLowerCase();
-    const canonicalUrl = canonicalizeStoreUrl(store?.sourceUrl || store?.url);
-    const key = `${normalizedStoreName}::${canonicalUrl}`;
+    const canonicalUrl = String(store?.canonicalUrl || canonicalizeStoreUrl(store?.sourceUrl || store?.url));
+    const key = `${normalizedStoreName}::${canonicalUrl || String(store?.source || 'unknown')}`;
     const previous = byKey.get(key);
 
     if (!previous) {
@@ -377,8 +457,14 @@ function dedupeStores(stores) {
     const nextScore = Number(store.matchScore) || 0;
     const prevPrice = Number(previous.price) || Number.MAX_SAFE_INTEGER;
     const nextPrice = Number(store.price) || Number.MAX_SAFE_INTEGER;
+    const prevQuality = urlQualityRank[String(previous.urlQuality || 'invalid')] ?? 0;
+    const nextQuality = urlQualityRank[String(store.urlQuality || 'invalid')] ?? 0;
 
-    if (nextScore > prevScore || (nextScore === prevScore && nextPrice < prevPrice)) {
+    if (
+      nextQuality > prevQuality
+      || (nextQuality === prevQuality && nextScore > prevScore)
+      || (nextQuality === prevQuality && nextScore === prevScore && nextPrice < prevPrice)
+    ) {
       byKey.set(key, { ...previous, ...store });
     }
   }
@@ -630,6 +716,10 @@ function normalizeNaverProduct(item, productType, category) {
         updatedAt: getStoreUpdatedAt(),
         url: item.link || '',
         sourceUrl: item.link || '',
+        pdpUrl: getStoreUrlQuality(item.link || '') === 'pdp' ? (item.link || '') : '',
+        canonicalUrl: canonicalizeStoreUrl(item.link || ''),
+        isPdpUrl: getStoreUrlQuality(item.link || '') === 'pdp',
+        urlQuality: getStoreUrlQuality(item.link || ''),
         isLowest: true,
       },
     ],
@@ -740,8 +830,16 @@ function mergeProducts(existingProducts, newProducts) {
     }
   }
 
+  const mergedProducts = Array.from(productMap.values());
+  for (const product of mergedProducts) {
+    if (!Array.isArray(product?.stores)) continue;
+    for (const store of product.stores) {
+      normalizeStoredStore(store);
+    }
+  }
+
   return {
-    products: Array.from(productMap.values()),
+    products: mergedProducts,
     addedCount,
     updatedCount,
   };
@@ -761,11 +859,13 @@ function mergeStores(existing, newProduct) {
   for (const newStoreRaw of incomingStores) {
     if (!newStoreRaw) continue;
     const newStore = { ...newStoreRaw };
-    const canonicalNewUrl = canonicalizeStoreUrl(newStore.sourceUrl || newStore.url);
+    enrichStoreUrlMetadata(newStore);
+    const canonicalNewUrl = newStore.canonicalUrl || canonicalizeStoreUrl(newStore.sourceUrl || newStore.url);
     const normalizedNewName = normalizeStoreName(newStore.store, normalizePlatformSource(newStore.source)).toLowerCase();
 
     const existingStore = existing.stores.find((store) => {
-      const canonicalExistingUrl = canonicalizeStoreUrl(store.sourceUrl || store.url);
+      enrichStoreUrlMetadata(store);
+      const canonicalExistingUrl = store.canonicalUrl || canonicalizeStoreUrl(store.sourceUrl || store.url);
       const normalizedExistingName = normalizeStoreName(store.store, normalizePlatformSource(store.source)).toLowerCase();
       if (canonicalExistingUrl && canonicalNewUrl) {
         return canonicalExistingUrl === canonicalNewUrl;
@@ -787,8 +887,9 @@ function mergeStores(existing, newProduct) {
         updatedAt: getStoreUpdatedAt(),
       };
       Object.assign(existingStore, merged);
+      enrichStoreUrlMetadata(existingStore);
     } else {
-      existing.stores.push({
+      const createdStore = {
         ...newStore,
         source: normalizePlatformSource(newStore.source),
         store: normalizeStoreName(newStore.store, normalizePlatformSource(newStore.source)),
@@ -797,7 +898,9 @@ function mergeStores(existing, newProduct) {
         collectedAt: newStore.collectedAt || getStoreUpdatedAt(),
         updatedAt: newStore.updatedAt || getStoreUpdatedAt(),
         isLowest: false,
-      });
+      };
+      enrichStoreUrlMetadata(createdStore);
+      existing.stores.push(createdStore);
     }
   }
 
@@ -1058,11 +1161,6 @@ function normalizeStoredStore(store) {
     changed = true;
   }
 
-  if (!store.sourceUrl && isHttpUrl(store.url)) {
-    store.sourceUrl = store.url;
-    changed = true;
-  }
-
   if (!store.storeLogo) {
     store.storeLogo = getStoreLogo(store.store);
     changed = true;
@@ -1077,6 +1175,10 @@ function normalizeStoredStore(store) {
 
   if (!store.updatedAt) {
     store.updatedAt = getStoreUpdatedAt();
+    changed = true;
+  }
+
+  if (enrichStoreUrlMetadata(store)) {
     changed = true;
   }
 

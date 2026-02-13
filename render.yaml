@@ -5,7 +5,7 @@ services:
     plan: free
     region: singapore
     nodeVersion: "20"
-    buildCommand: npm install --include=dev && npx vite build
+    buildCommand: npm install --include=dev && npm run build
     startCommand: node server/index.js
     envVars:
       # 네이버 쇼핑 API
@@ -90,7 +90,7 @@ services:
       - key: PLATFORM_STORES_PER_SOURCE
         value: "2"
       - key: PLATFORM_MATCH_SCORE_THRESHOLD
-        value: "58"
+        value: "45"
       - key: PLATFORM_ENRICH_TIMEOUT_MS
         value: "12000"
       - key: PLATFORM_ENRICH_CONCURRENCY

@@ -11,6 +11,7 @@ const {
   verifyPriceToken,
   createConfirmToken,
   verifyConfirmToken,
+  findOfferById,
 } = require('../services/offerVerification');
 
 const router = express.Router();
@@ -126,6 +127,15 @@ router.get('/:offerId', async (req, res) => {
   if (!offerId) {
     return res.status(400).json({ error: 'offerId 필요' });
   }
+  const found = findOfferById(offerId);
+  if (!found) {
+    return sendPayload(req, res, {
+      action: 'VERIFY_FAILED',
+      offerId,
+      code: 'OFFER_NOT_FOUND',
+      error: '해당 상품 링크를 찾을 수 없습니다.',
+    });
+  }
 
   const strictGuard = isStrictPriceGuardEnabled();
   const allowDegraded = isDegradedRedirectAllowed();
@@ -136,10 +146,11 @@ router.get('/:offerId', async (req, res) => {
   const listedVerifiedAt = tokenResult.ok ? tokenResult.payload.verifiedAt : null;
 
   try {
+    const freshSkipEnabled = process.env.CLICK_FRESH_SKIP !== 'false';
     const result = await withTimeout(
       runOfferGuard(offerId, {
         trigger: 'click',
-        force: true,
+        force: !freshSkipEnabled,
         strictGuard,
         allowUnverifiedRedirect: !strictGuard || allowDegraded,
         listedPrice,

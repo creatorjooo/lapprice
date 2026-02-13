@@ -128,8 +128,6 @@ export default function VsCompare({ laptops }: VsCompareProps) {
                 <div className="grid grid-cols-2 gap-2">
                   <a
                     href={storeA.url}
-                    target="_blank"
-                    rel="noopener noreferrer"
                     onClick={() => trackAffiliateClick({ productId: laptopA.id, platform: getPlatformKey(storeA.store), source: 'compare', url: storeA.url, productName: laptopA.name })}
                     className="flex items-center justify-center gap-1 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold transition-colors"
                   >
@@ -138,8 +136,6 @@ export default function VsCompare({ laptops }: VsCompareProps) {
                   </a>
                   <a
                     href={storeB.url}
-                    target="_blank"
-                    rel="noopener noreferrer"
                     onClick={() => trackAffiliateClick({ productId: laptopB.id, platform: getPlatformKey(storeB.store), source: 'compare', url: storeB.url, productName: laptopB.name })}
                     className="flex items-center justify-center gap-1 py-2 bg-slate-800 hover:bg-slate-900 text-white rounded-lg text-xs font-semibold transition-colors"
                   >

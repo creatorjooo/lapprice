@@ -1,5 +1,18 @@
 const API_BASE = (import.meta.env.VITE_API_URL || '').replace(/\/$/, '');
-const PROXY_HOSTS = ['shopping-phinf.pstatic.net'];
+const PROXY_HOSTS = [
+  'shopping-phinf.pstatic.net',
+  'shop-phinf.pstatic.net',
+  'coupangcdn.com',
+  'image.11st.co.kr',
+  'i.011st.com',
+  'gmarket.co.kr',
+  'auction.co.kr',
+  'danawa.com',
+  'enuri.com',
+  'ssgcdn.com',
+  'lotteon.com',
+  'interpark.com',
+];
 
 function isHttpUrl(value: string): boolean {
   return /^https?:\/\//i.test(value);
@@ -29,4 +42,3 @@ export function toImageSrc(src?: string): string {
   if (isProxyCandidate(value)) return toImageProxySrc(value);
   return value;
 }
-

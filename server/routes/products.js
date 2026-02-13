@@ -47,7 +47,9 @@ function buildCoverage(products) {
 function normalizePriceMode(value, fallback = 'strict') {
   const normalized = String(value || '').trim().toLowerCase();
   if (normalized === 'strict') return 'strict';
+  if (normalized === 'verifiedonly' || normalized === 'verified_only') return 'strict';
   if (normalized === 'legacy') return 'legacy';
+  if (normalized === 'default') return 'legacy';
   return fallback;
 }
 
@@ -177,6 +179,7 @@ router.get('/', (req, res) => {
       displayPriceFreshMinutes: getDisplayPriceFreshMinutes(),
       generatedAt: catalog.generatedAt || new Date().toISOString(),
       strictGuard: isStrictPriceGuardEnabled(),
+      coverage,
     },
     coverage,
     products: paginatedProducts,

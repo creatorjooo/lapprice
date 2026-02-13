@@ -42,7 +42,6 @@ import { trackAffiliateClick, getPlatformKey, isAffiliatePlatform } from '@/util
 import { formatStoreUpdatedAt } from '@/utils/time';
 import {
   canShowStorePrice,
-  getStoreDisplayPrice,
   getStoreHref,
   getStoreSortPrice,
   getStoreTrackingUrl,
@@ -111,8 +110,13 @@ export default function ProductCard({
   const storeUrls = useMemo(() => sortedStores.map((s) => getStoreTrackingUrl(s)), [sortedStores]);
   const { affiliateUrls } = useAffiliateBatch(storeUrls, `lapprice_product_${laptop.id}`);
 
-  // CTA 대상: 표시 가능한 가격이 있는 스토어 최저가
-  const ctaStore = sortedStores.find((store) => canShowStorePrice(store));
+  const isVerifiedFresh = (priceState?: string) => priceState === 'verified_fresh';
+  // CTA 대상: 검증 완료(verified_fresh) 스토어 중 최저가 우선
+  const ctaStore = sortedStores.find((store) => (
+    isVerifiedFresh(String(store.priceState || store.price_state || ''))
+    && canShowStorePrice(store)
+    && !!getStoreHref(store)
+  ));
 
   const ctaStoreIndex = ctaStore ? sortedStores.indexOf(ctaStore) : -1;
   const ctaHref = useMemo(() => {
@@ -126,8 +130,9 @@ export default function ProductCard({
   const absoluteLowestPrice = useMemo(
     () => {
       const prices = sortedStores
-        .map((store) => getStoreDisplayPrice(store))
-        .filter((price): price is number => price !== null && price > 0);
+        .filter((store) => isVerifiedFresh(String(store.priceState || store.price_state || '')))
+        .map((store) => Number(store.displayPrice ?? store.display_price) || 0)
+        .filter((price) => price > 0);
       return prices.length > 0 ? Math.min(...prices) : 0;
     },
     [sortedStores]
@@ -372,7 +377,7 @@ export default function ProductCard({
                 clearRedirectError();
                 if (!ctaHref) return;
                 handleStoreClick(ctaStore, ctaTrackingUrl || ctaHref, 'cta_button');
-                await openVerifiedLink(ctaHref);
+                await openVerifiedLink(ctaHref, ctaStore.offerId);
               }}
               className="flex items-center justify-center gap-1.5 w-full h-9 mb-2 rounded-lg bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 text-white text-xs font-semibold transition-all shadow-sm hover:shadow-md"
             >
@@ -397,21 +402,29 @@ export default function ProductCard({
               const storeUrl = baseHref.startsWith('/r/')
                 ? baseHref
                 : (affiliateUrls[index] || baseHref);
+              const disabled = !storeUrl;
               const storePrice = getStoreVerifiedPrice(store);
               const isCoupang = isCoupangUrl(trackingUrl);
               const isAffil = isAffiliatePlatform(store.store);
+              const resolvedPriceState = String(store.priceState || store.price_state || '');
+              const stateLabel = resolvedPriceState === 'verified_fresh'
+                ? '검증됨'
+                : (resolvedPriceState === 'verified_stale' ? '검증 전' : (resolvedPriceState === 'failed' ? '실패' : '검증 전'));
 
               return (
                 <button
                   type="button"
                   key={index}
+                  disabled={disabled}
                   onClick={async () => {
+                    if (disabled) return;
                     clearRedirectError();
                     handleStoreClick(store, trackingUrl, 'productcard');
-                    await openVerifiedLink(storeUrl);
+                    await openVerifiedLink(storeUrl, store.offerId);
                   }}
                   className={cn(
                     'flex w-full items-center justify-between p-1.5 rounded-md transition-colors text-left',
+                    disabled && 'opacity-60 cursor-not-allowed',
                     isAffil
                       ? 'bg-blue-50 dark:bg-blue-950/30 hover:bg-blue-100 dark:hover:bg-blue-900/40 border border-blue-100 dark:border-blue-900/50'
                       : 'bg-slate-50 dark:bg-slate-700/50 hover:bg-slate-100 dark:hover:bg-slate-700'
@@ -435,6 +448,9 @@ export default function ProductCard({
                         {isAffil && (
                           <span className="text-[8px] text-slate-400">제휴</span>
                         )}
+                        <Badge className="bg-slate-200 text-slate-600 dark:bg-slate-700 dark:text-slate-300 text-[8px] px-1 py-0 h-3.5 font-normal">
+                          {stateLabel}
+                        </Badge>
                       </div>
                       <p className="text-[10px] text-slate-400 flex items-center gap-0.5">
                         <Clock className="w-2.5 h-2.5" />
@@ -446,8 +462,11 @@ export default function ProductCard({
                   </div>
                   <div className="text-right">
                     <p className="text-xs font-bold">{storePrice > 0 ? `${storePrice.toLocaleString()}원` : '가격 확인 필요'}</p>
-                    {storePrice > 0 && storePrice > absoluteLowestPrice && (
+                    {storePrice > 0 && absoluteLowestPrice > 0 && storePrice > absoluteLowestPrice && (
                       <p className="text-[10px] text-slate-400">+{(storePrice - absoluteLowestPrice).toLocaleString()}원</p>
+                    )}
+                    {disabled && (
+                      <p className="text-[10px] text-rose-500">연결 불가</p>
                     )}
                     <p className="text-[10px] text-slate-400 flex items-center gap-0.5 justify-end">
                       <Truck className="w-2.5 h-2.5" />

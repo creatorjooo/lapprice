@@ -20,7 +20,6 @@ import { useVerifiedRedirect } from '@/hooks/useVerifiedRedirect';
 import { trackAffiliateClick, getPlatformKey, isAffiliatePlatform } from '@/utils/tracking';
 import {
   canShowStorePrice,
-  getStoreDisplayPrice,
   getStoreHref,
   getStoreSortPrice,
   getStoreTrackingUrl,
@@ -279,19 +278,22 @@ export default function MonitorPage({
                           const href = getStoreHref(store);
                           const trackingUrl = getStoreTrackingUrl(store) || href;
                           const platform = getPlatformKey(store.store);
+                          const disabled = !href;
                           return (
                             <button
                               type="button"
                               key={idx}
+                              disabled={disabled}
                               onClick={async () => {
+                                if (disabled) return;
                                 if (isAffiliatePlatform(store.store)) {
                                   trackAffiliateClick({ productId: monitor.id, platform, source: 'productcard', url: trackingUrl, productName: monitor.name });
                                 }
-                                await openVerifiedLinkInPage(href);
+                                await openVerifiedLinkInPage(href, store.offerId);
                               }}
-                              className="flex-1 text-center py-2 text-sm font-medium bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+                              className={cn("flex-1 text-center py-2 text-sm font-medium rounded-lg transition-colors", disabled ? "bg-slate-300 text-slate-500 cursor-not-allowed" : "bg-blue-600 text-white hover:bg-blue-700")}
                             >
-                              {isCoupangUrl(trackingUrl) ? '쿠팡' : store.store || '최저가 보기'} <ExternalLink className="w-3 h-3 inline ml-1" />
+                              {disabled ? '연결 불가' : (isCoupangUrl(trackingUrl) ? '쿠팡' : store.store || '최저가 보기')} <ExternalLink className="w-3 h-3 inline ml-1" />
                             </button>
                           );
                         })}
@@ -525,7 +527,12 @@ function MonitorProductCard({
   const storeUrls = useMemo(() => sortedStores.map((store) => getStoreTrackingUrl(store)), [sortedStores]);
   const { affiliateUrls } = useAffiliateBatch(storeUrls, `monitor_${monitor.id}`);
 
-  const ctaStore = sortedStores.find((store) => canShowStorePrice(store));
+  const isVerifiedFresh = (priceState?: string) => priceState === 'verified_fresh';
+  const ctaStore = sortedStores.find((store) => (
+    isVerifiedFresh(String(store.priceState || store.price_state || ''))
+    && canShowStorePrice(store)
+    && !!getStoreHref(store)
+  ));
   const ctaStoreIdx = ctaStore ? sortedStores.indexOf(ctaStore) : -1;
   const ctaHref = useMemo(() => {
     if (!ctaStore) return undefined;
@@ -537,8 +544,9 @@ function MonitorProductCard({
   const absoluteLowestPrice = useMemo(
     () => {
       const prices = sortedStores
-        .map((store) => getStoreDisplayPrice(store))
-        .filter((price): price is number => price !== null && price > 0);
+        .filter((store) => isVerifiedFresh(String(store.priceState || store.price_state || '')))
+        .map((store) => Number(store.displayPrice ?? store.display_price) || 0)
+        .filter((price) => price > 0);
       return prices.length > 0 ? Math.min(...prices) : 0;
     },
     [sortedStores],
@@ -566,7 +574,7 @@ function MonitorProductCard({
       url: ctaTrackingUrl || ctaHref,
       productName: monitor.name,
     });
-    await openVerifiedLink(ctaHref);
+    await openVerifiedLink(ctaHref, ctaStore?.offerId);
   };
 
   const handleStoreClick = (store: typeof monitor.stores[0], url: string) => {
@@ -694,26 +702,34 @@ function MonitorProductCard({
             const storeUrl = baseHref.startsWith('/r/')
               ? baseHref
               : ((affiliateUrls as Record<number, string>)[idx] || baseHref);
+            const disabled = !storeUrl;
             const isAff = isAffiliatePlatform(store.store) || isCoupangUrl(trackingUrl);
             const storePrice = getStoreVerifiedPrice(store);
+            const resolvedPriceState = String(store.priceState || store.price_state || '');
+            const stateLabel = resolvedPriceState === 'verified_fresh'
+              ? '검증됨'
+              : (resolvedPriceState === 'verified_stale' ? '검증 전' : (resolvedPriceState === 'failed' ? '실패' : '검증 전'));
             return (
               <button
                 type="button"
                 key={idx}
+                disabled={disabled}
                 onClick={async () => {
+                  if (disabled) return;
                   clearRedirectError();
                   handleStoreClick(store, trackingUrl);
-                  await openVerifiedLink(storeUrl);
+                  await openVerifiedLink(storeUrl, store.offerId);
                 }}
-                className={cn('flex w-full items-center justify-between p-1.5 rounded-md transition-colors text-left', isAff ? 'bg-purple-50 hover:bg-purple-100' : 'bg-slate-50 hover:bg-slate-100')}
+                className={cn('flex w-full items-center justify-between p-1.5 rounded-md transition-colors text-left', disabled && 'opacity-60 cursor-not-allowed', isAff ? 'bg-purple-50 hover:bg-purple-100' : 'bg-slate-50 hover:bg-slate-100')}
               >
                 <div className="flex items-center gap-1.5">
                   <span className="text-sm">{store.storeLogo}</span>
                   <div>
                     <p className="text-xs font-medium flex items-center gap-1">
                       {store.store}
-                      {storePrice > 0 && storePrice === absoluteLowestPrice && <span className="text-[9px] bg-emerald-100 text-emerald-600 px-1 rounded">최저가</span>}
+                      {storePrice > 0 && absoluteLowestPrice > 0 && storePrice === absoluteLowestPrice && <span className="text-[9px] bg-emerald-100 text-emerald-600 px-1 rounded">최저가</span>}
                       {isAff && <span className="text-[9px] bg-blue-100 text-blue-600 px-1 rounded">제휴</span>}
+                      <span className="text-[9px] bg-slate-100 text-slate-500 px-1 rounded">{stateLabel}</span>
                     </p>
                     <p className="text-[10px] text-slate-400">
                       {isStoreVerified(store)
@@ -722,7 +738,10 @@ function MonitorProductCard({
                     </p>
                   </div>
                 </div>
-                <p className="text-xs font-bold">{storePrice > 0 ? `${storePrice.toLocaleString()}원` : '가격 확인 필요'}</p>
+                <div className="text-right">
+                  <p className="text-xs font-bold">{storePrice > 0 ? `${storePrice.toLocaleString()}원` : '가격 확인 필요'}</p>
+                  {disabled && <p className="text-[10px] text-rose-500">연결 불가</p>}
+                </div>
               </button>
             );
           })}

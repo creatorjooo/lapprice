@@ -5,7 +5,7 @@ require('dotenv').config();
 
 const { getCachedResult, setCachedResult, withTimeout } = require('./utils/helpers');
 const { syncAll, ensureDirectories, healAllImages } = require('./services/productSync');
-const { verifyAllOffers, ensureVerificationStorage } = require('./services/offerVerification');
+const { verifyAllOffers, ensureVerificationStorage, batchConvertDeeplinks } = require('./services/offerVerification');
 let ensureTrackedStorage = () => {};
 let refreshAllTrackedProducts = async () => ({ checked: 0, updated: 0, changed: 0 });
 try {
@@ -175,6 +175,11 @@ app.listen(PORT, () => {
         verificationSummaries.forEach((summary) => {
           console.log(`  🔎 ${summary.productType}: 검증 ${summary.attempted}건, 성공 ${summary.verified}, 실패 ${summary.failed}`);
         });
+        console.log('🔗 [딥링크 배치] 시작...');
+        const dlResult = await batchConvertDeeplinks();
+        if (dlResult.converted > 0 || dlResult.failed > 0) {
+          console.log(`  🔗 딥링크: 변환 ${dlResult.converted}개, 실패 ${dlResult.failed}개`);
+        }
         const trackedResults = await refreshAllTrackedProducts(API_BASE_URL);
         if (trackedResults.checked > 0) {
           console.log(`📈 [추적 상품] 점검 ${trackedResults.checked}개 · 갱신 ${trackedResults.updated}개 · 변동 ${trackedResults.changed}개`);
@@ -191,6 +196,7 @@ app.listen(PORT, () => {
         // 동기화 후 이미지 자동 보충
         await healAllImages();
         await verifyAllOffers({ trigger: 'batch', force: true });
+        await batchConvertDeeplinks();
         await refreshAllTrackedProducts(API_BASE_URL);
       } catch (err) {
         console.error('❌ [주기 동기화] 실패:', err.message);

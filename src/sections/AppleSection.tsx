@@ -4,6 +4,7 @@ import { ExternalLink, Zap, ChevronRight, GraduationCap, Shield, Smartphone, Bat
 import { Badge } from '@/components/ui/badge';
 import type { Laptop } from '@/types';
 import { trackAffiliateClick, getPlatformKey } from '@/utils/tracking';
+import { getStoreSortPrice, getStoreVerifiedPrice } from '@/utils/offers';
 
 interface AppleSectionProps {
   laptops: Laptop[];
@@ -99,7 +100,7 @@ export default function AppleSection({ laptops }: AppleSectionProps) {
               </div>
               <div className="text-center">
                 <p className="text-2xl sm:text-3xl font-semibold">
-                  {Math.min(...macbooks.map((m) => m.prices.current)).toLocaleString()}원~
+                  {(() => { const valid = macbooks.map(m => m.prices.current).filter(p => p > 0); return valid.length > 0 ? `${Math.min(...valid).toLocaleString()}원~` : '가격 확인 중'; })()}
                 </p>
                 <p className="text-xs text-[#86868b] mt-1">최저가</p>
               </div>
@@ -131,7 +132,7 @@ export default function AppleSection({ laptops }: AppleSectionProps) {
 
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-5">
             {macbooks.map((mac, index) => {
-              const sortedStores = [...mac.stores].sort((a, b) => a.price - b.price);
+              const sortedStores = [...mac.stores].sort((a, b) => getStoreSortPrice(a) - getStoreSortPrice(b));
               const lowestStore = sortedStores[0];
               if (!lowestStore) return null;
 
@@ -182,7 +183,7 @@ export default function AppleSection({ laptops }: AppleSectionProps) {
                   <div className="mb-3 pt-3 border-t border-[#f5f5f7]">
                     <div className="flex items-baseline gap-2">
                       <span className="text-xl font-bold text-[#1d1d1f]">
-                        {mac.prices.current.toLocaleString()}원
+                        {mac.prices.current > 0 ? `${mac.prices.current.toLocaleString()}원` : '가격 확인 필요'}
                       </span>
                     </div>
                     {mac.discount.percent > 0 && (
@@ -190,9 +191,11 @@ export default function AppleSection({ laptops }: AppleSectionProps) {
                         {mac.prices.original.toLocaleString()}원
                       </p>
                     )}
-                    <p className="text-[10px] text-emerald-600 mt-0.5">
-                      역대최저 {mac.prices.lowest.toLocaleString()}원
-                    </p>
+                    {mac.prices.lowest > 0 && (
+                      <p className="text-[10px] text-emerald-600 mt-0.5">
+                        역대최저 {mac.prices.lowest.toLocaleString()}원
+                      </p>
+                    )}
                   </div>
 
                   {/* Editor Score */}
@@ -234,7 +237,7 @@ export default function AppleSection({ laptops }: AppleSectionProps) {
                           className="flex items-center justify-between px-2 py-1 rounded-lg hover:bg-[#f5f5f7] transition-colors text-[10px]"
                         >
                           <span className="text-[#86868b]">{store.store}</span>
-                          <span className="font-medium text-[#1d1d1f]">{store.price.toLocaleString()}원</span>
+                          <span className="font-medium text-[#1d1d1f]">{getStoreVerifiedPrice(store).toLocaleString()}원</span>
                         </a>
                       ))}
                     </div>
@@ -266,7 +269,7 @@ export default function AppleSection({ laptops }: AppleSectionProps) {
           <div className="space-y-4">
             {buyingGuide.map((item, index) => {
               const mac = macbooks.find((m) => m.id === item.id);
-              const store = mac ? [...mac.stores].sort((a, b) => a.price - b.price)[0] : undefined;
+              const store = mac ? [...mac.stores].sort((a, b) => getStoreSortPrice(a) - getStoreSortPrice(b))[0] : undefined;
 
               return (
                 <motion.div

@@ -5,6 +5,7 @@ import { Badge } from '@/components/ui/badge';
 import { getTopPicks, getHotDeals } from '@/data/index';
 import { trackAffiliateClick, getPlatformKey } from '@/utils/tracking';
 import { toImageSrc } from '@/utils/image';
+import { getStoreSortPrice, getStoreVerifiedPrice } from '@/utils/offers';
 
 interface HomePageProps {
   onNavigateToPage: (page: string) => void;
@@ -230,7 +231,7 @@ export default function HomePage({ onNavigateToPage }: HomePageProps) {
                       )}
                       <div className="flex items-center gap-2 mt-2">
                         <span className="text-base font-bold text-slate-900">
-                          {product.prices.current.toLocaleString()}원
+                          {product.prices.current > 0 ? `${product.prices.current.toLocaleString()}원` : '가격 확인 필요'}
                         </span>
                         {product.discount.percent > 0 && (
                           <span className="text-xs text-emerald-600 font-medium">
@@ -260,7 +261,7 @@ export default function HomePage({ onNavigateToPage }: HomePageProps) {
               const typeLabel = deal.productType === 'laptop' ? '💻 노트북' : deal.productType === 'monitor' ? '🖥️ 모니터' : '🖥️ 데스크탑';
               const pageHash = deal.productType;
               const lowestStore = deal.stores && deal.stores.length > 0
-                ? deal.stores.reduce((min, s) => (s.price < min.price ? s : min), deal.stores[0])
+                ? deal.stores.reduce((min, s) => (getStoreSortPrice(s) < getStoreSortPrice(min) ? s : min), deal.stores[0])
                 : undefined;
               return (
                 <div
@@ -288,16 +289,16 @@ export default function HomePage({ onNavigateToPage }: HomePageProps) {
                         {deal.name}
                       </h3>
                       <div className="flex items-center gap-2 mt-1">
-                        <span className="text-base font-bold text-slate-900">{deal.prices.current.toLocaleString()}원</span>
-                        <span className="text-xs text-slate-400 line-through">{deal.prices.original.toLocaleString()}원</span>
+                        <span className="text-base font-bold text-slate-900">{deal.prices.current > 0 ? `${deal.prices.current.toLocaleString()}원` : '가격 확인 필요'}</span>
+                        {deal.prices.original > 0 && deal.discount.percent > 0 && (
+                          <span className="text-xs text-slate-400 line-through">{deal.prices.original.toLocaleString()}원</span>
+                        )}
                       </div>
                     </div>
                   </div>
                   {lowestStore && (
                     <a
                       href={lowestStore.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
                       onClick={(e) => {
                         e.stopPropagation();
                         trackAffiliateClick({
@@ -311,7 +312,7 @@ export default function HomePage({ onNavigateToPage }: HomePageProps) {
                       className="mt-3 flex items-center justify-center gap-1.5 w-full h-8 rounded-lg bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white text-xs font-semibold transition-all"
                     >
                       <Zap className="w-3.5 h-3.5" />
-                      {lowestStore.store} {lowestStore.price.toLocaleString()}원 구매
+                      {lowestStore.store} {getStoreVerifiedPrice(lowestStore).toLocaleString()}원 구매
                       <ExternalLink className="w-3 h-3 opacity-60" />
                     </a>
                   )}

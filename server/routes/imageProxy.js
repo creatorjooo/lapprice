@@ -1,7 +1,20 @@
 const express = require('express');
 const router = express.Router();
 
-const DEFAULT_ALLOWED_HOSTS = ['shopping-phinf.pstatic.net'];
+const DEFAULT_ALLOWED_HOSTS = [
+  'shopping-phinf.pstatic.net',
+  'shop-phinf.pstatic.net',
+  'coupangcdn.com',
+  'image.11st.co.kr',
+  'i.011st.com',
+  'gmarket.co.kr',
+  'auction.co.kr',
+  'danawa.com',
+  'enuri.com',
+  'ssgcdn.com',
+  'lotteon.com',
+  'interpark.com',
+];
 const MAX_IMAGE_BYTES = parseInt(process.env.IMAGE_PROXY_MAX_BYTES || `${8 * 1024 * 1024}`, 10);
 const CACHE_SECONDS = parseInt(process.env.IMAGE_PROXY_CACHE_SECONDS || '86400', 10);
 const FETCH_TIMEOUT_MS = parseInt(process.env.IMAGE_PROXY_TIMEOUT_MS || '5000', 10);

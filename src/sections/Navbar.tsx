@@ -391,7 +391,7 @@ export default function Navbar({
                         <p className="text-xs text-slate-500 mt-0.5">{item.specSummary}</p>
                       </div>
                       <div className="text-right flex-shrink-0">
-                        <p className="text-sm font-bold text-emerald-600">{item.price.toLocaleString()}원</p>
+                        <p className="text-sm font-bold text-emerald-600">{item.price > 0 ? `${item.price.toLocaleString()}원` : '가격 확인 필요'}</p>
                         {item.discountPercent > 0 && <p className="text-[10px] text-rose-500">-{item.discountPercent}%</p>}
                       </div>
                     </button>
@@ -483,7 +483,7 @@ export default function Navbar({
                                 </div>
                                 <div className="flex items-center gap-1.5 flex-shrink-0">
                                   <div className="text-right">
-                                    <p className={cn('text-xs font-bold', isAffiliatePlatform && 'text-blue-600')}>{product.price.toLocaleString()}원</p>
+                                    <p className={cn('text-xs font-bold', isAffiliatePlatform && 'text-blue-600')}>{product.price > 0 ? `${product.price.toLocaleString()}원` : '가격 확인 필요'}</p>
                                     {lowestPrice !== null && product.price > lowestPrice && (
                                       <p className="text-[9px] text-slate-400">+{(product.price - lowestPrice).toLocaleString()}원</p>
                                     )}

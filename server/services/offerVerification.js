@@ -156,6 +156,89 @@ function canonicalizeUrl(value) {
   }
 }
 
+function isLikelySearchUrl(value) {
+  const raw = String(value || '').trim();
+  if (!isHttpUrl(raw)) return false;
+
+  try {
+    const parsed = new URL(raw);
+    const host = parsed.hostname.replace(/^www\./i, '').toLowerCase();
+    const path = parsed.pathname.toLowerCase();
+    const queryKeys = [...parsed.searchParams.keys()].map((key) => String(key || '').toLowerCase());
+
+    const hasSearchQuery = queryKeys.some((key) => (
+      key === 'q'
+      || key === 'query'
+      || key === 'keyword'
+      || key === 'k'
+      || key === 'search'
+      || key === 'sort'
+      || key === 'pagingindex'
+      || key === 'page'
+    ));
+
+    if (hasSearchQuery) return true;
+
+    if (host.includes('search.shopping.naver.com') && path.includes('/search/')) return true;
+    if (host.endsWith('coupang.com') && (path.startsWith('/np/search') || path.startsWith('/np/categories'))) return true;
+    if (host.endsWith('11st.co.kr') && path.includes('/products')) return false;
+    if (host.endsWith('11st.co.kr') && path.includes('/search')) return true;
+    if (host.endsWith('gmarket.co.kr') && (path.includes('/search') || path.includes('/n/list'))) return true;
+    if (host.endsWith('auction.co.kr') && (path.includes('/search') || path.includes('/n/list'))) return true;
+    if (host.endsWith('danawa.com') && path.includes('/search')) return true;
+    if (host.endsWith('enuri.com') && path.includes('/search')) return true;
+    if (host.endsWith('ssg.com') && path.includes('/search')) return true;
+    if (host.endsWith('lotteon.com') && path.includes('/search')) return true;
+    if (host.endsWith('interpark.com') && path.includes('/search')) return true;
+
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+function getUrlQuality(value) {
+  const raw = String(value || '').trim();
+  if (!isHttpUrl(raw)) return 'invalid';
+  return isLikelySearchUrl(raw) ? 'search' : 'pdp';
+}
+
+function resolveOfferTargetUrl(store, options = {}) {
+  const strict = options.strict !== false;
+  const candidates = [
+    store?.resolvedProductUrl,
+    store?.affiliateUrl,
+    store?.pdpUrl,
+    store?.sourceUrl,
+    store?.url,
+  ]
+    .map((url) => String(url || '').trim())
+    .filter((url) => isHttpUrl(url));
+
+  for (const candidate of candidates) {
+    if (getUrlQuality(candidate) === 'pdp') {
+      return { url: candidate, isPdpUrl: true, urlQuality: 'pdp', code: null };
+    }
+  }
+
+  if (!strict) {
+    const fallback = candidates[0] || '';
+    return {
+      url: fallback || null,
+      isPdpUrl: false,
+      urlQuality: fallback ? getUrlQuality(fallback) : 'invalid',
+      code: fallback ? null : 'URL_NOT_FOUND',
+    };
+  }
+
+  return {
+    url: null,
+    isPdpUrl: false,
+    urlQuality: candidates.length > 0 ? 'search' : 'invalid',
+    code: candidates.length > 0 ? 'PDP_URL_REQUIRED' : 'URL_NOT_FOUND',
+  };
+}
+
 function normalizeText(value) {
   return String(value || '')
     .toLowerCase()
@@ -734,11 +817,13 @@ function isVerifiedFreshStore(store, nowMs = Date.now()) {
 }
 
 function getStorePriceState(store, nowMs = Date.now()) {
+  const status = normalizeStatus(store?.verificationStatus, 'failed');
   if (String(store?.priceState || '') === 'personalized') return 'personalized';
   if (isVerifiedFreshStore(store, nowMs)) return 'verified_fresh';
-  if (normalizeStatus(store?.verificationStatus, 'failed') === 'verified' && toNumber(store?.verifiedPrice) > 0) {
+  if ((status === 'verified' || status === 'stale') && toNumber(store?.verifiedPrice) > 0) {
     return 'verified_stale';
   }
+  if (status === 'failed') return 'failed';
   return 'unverified';
 }
 
@@ -788,6 +873,31 @@ function ensureStoreOfferMetadata(product, store) {
     : (isHttpUrl(currentUrl) ? currentUrl : '');
   if (store.sourceUrl !== sourceUrl) {
     store.sourceUrl = sourceUrl;
+    changed = true;
+  }
+
+  const pdpTarget = resolveOfferTargetUrl(store, { strict: true });
+  const pdpUrl = pdpTarget.url || '';
+  if ((store.pdpUrl || '') !== pdpUrl) {
+    store.pdpUrl = pdpUrl;
+    changed = true;
+  }
+
+  const canonicalUrl = canonicalizeUrl(pdpUrl || sourceUrl || currentUrl);
+  if ((store.canonicalUrl || '') !== canonicalUrl) {
+    store.canonicalUrl = canonicalUrl;
+    changed = true;
+  }
+
+  const isPdpUrl = !!pdpUrl;
+  if (Boolean(store.isPdpUrl) !== isPdpUrl) {
+    store.isPdpUrl = isPdpUrl;
+    changed = true;
+  }
+
+  const urlQuality = isPdpUrl ? 'pdp' : getUrlQuality(sourceUrl || currentUrl);
+  if ((store.urlQuality || '') !== urlQuality) {
+    store.urlQuality = urlQuality;
     changed = true;
   }
 
@@ -1074,6 +1184,7 @@ async function verifyWithNaverApi(store, product) {
     price: verifiedPrice,
     source: 'naver_api',
     matchedProductId: String(best.item?.productId || ''),
+    resolvedProductUrl: String(best.item?.link || ''),
   };
 }
 
@@ -1201,6 +1312,7 @@ async function verifyWithCoupangApi(store, product) {
     price: verifiedPrice,
     source: 'coupang_api',
     matchedProductId: String(best.item?.productId || ''),
+    resolvedProductUrl: String(best.item?.productUrl || ''),
   };
 }
 
@@ -1391,6 +1503,9 @@ function applyVerificationSuccess(store, result) {
     : null;
   store.lastErrorCode = null;
   store.lastErrorMessage = null;
+  if (result.resolvedProductUrl) {
+    store.resolvedProductUrl = result.resolvedProductUrl;
+  }
 }
 
 function applyVerificationFailure(store, result) {
@@ -1471,6 +1586,26 @@ async function verifyOfferById(offerId, options = {}) {
   if (!force && isFresh) {
     const currentPrice = toNumber(store.verifiedPrice);
     const priceChanged = listedPrice > 0 && currentPrice > 0 && listedPrice !== currentPrice;
+    const skipTarget = resolveOfferTargetUrl(store, { strict: true });
+    if (!skipTarget.url) {
+      return {
+        ok: false,
+        offerId,
+        productId: product.id,
+        productType,
+        verificationStatus: store.verificationStatus,
+        verificationMethod: store.verificationMethod,
+        code: skipTarget.code || 'PDP_URL_REQUIRED',
+        message: '상품 상세 페이지 링크를 확인할 수 없습니다.',
+        sourceUrl: store.sourceUrl,
+        redirectUrl: null,
+        skipped: true,
+        listedPrice: listedPrice || null,
+        listedVerifiedAt,
+        priceChanged: false,
+      };
+    }
+
     return {
       ok: true,
       offerId,
@@ -1481,7 +1616,7 @@ async function verifyOfferById(offerId, options = {}) {
       verifiedPrice: toNumber(store.verifiedPrice),
       verifiedAt: store.verifiedAt,
       sourceUrl: store.sourceUrl,
-      redirectUrl: store.affiliateUrl || store.sourceUrl,
+      redirectUrl: skipTarget.url,
       skipped: true,
       listedPrice: listedPrice || null,
       listedVerifiedAt,
@@ -1494,6 +1629,9 @@ async function verifyOfferById(offerId, options = {}) {
   if (!isSupportedStore(store)) {
     markUnsupportedStore(store);
     saveCatalogFile(productType, catalog);
+    const degradedTarget = allowUnverifiedRedirect
+      ? resolveOfferTargetUrl(store, { strict: true })
+      : { url: null };
 
     appendVerificationLog({
       timestamp: new Date().toISOString(),
@@ -1514,7 +1652,7 @@ async function verifyOfferById(offerId, options = {}) {
       guarded: strictGuard,
       errorCode: store.lastErrorCode,
       errorMessage: store.lastErrorMessage,
-      blocked: trigger === 'click' && !allowUnverifiedRedirect,
+      blocked: trigger === 'click' && !degradedTarget.url,
     });
 
     return {
@@ -1527,7 +1665,7 @@ async function verifyOfferById(offerId, options = {}) {
       code: store.lastErrorCode,
       message: store.lastErrorMessage,
       sourceUrl: store.sourceUrl,
-      redirectUrl: allowUnverifiedRedirect ? (store.affiliateUrl || store.sourceUrl) : null,
+      redirectUrl: degradedTarget.url || null,
       listedPrice: listedPrice || null,
       listedVerifiedAt,
       priceChanged: false,
@@ -1542,6 +1680,8 @@ async function verifyOfferById(offerId, options = {}) {
     applyVerificationFailure(store, result);
   }
 
+  ensureStoreOfferMetadata(product, store);
+
   saveCatalogFile(productType, catalog);
 
   const mismatch = result.ok
@@ -1551,6 +1691,12 @@ async function verifyOfferById(offerId, options = {}) {
   const priceChanged = result.ok
     ? (listedPrice > 0 && latestVerifiedPrice > 0 && listedPrice !== latestVerifiedPrice)
     : false;
+  const strictTarget = resolveOfferTargetUrl(store, { strict: true });
+  const degradedTarget = resolveOfferTargetUrl(store, { strict: false });
+  const redirectUrl = result.ok
+    ? strictTarget.url
+    : (allowUnverifiedRedirect ? strictTarget.url || degradedTarget.url : null);
+  const blocked = trigger === 'click' && !redirectUrl;
 
   appendVerificationLog({
     timestamp: new Date().toISOString(),
@@ -1574,11 +1720,16 @@ async function verifyOfferById(offerId, options = {}) {
     guarded: strictGuard,
     errorCode: result.ok ? null : store.lastErrorCode,
     errorMessage: result.ok ? null : store.lastErrorMessage,
-    blocked: trigger === 'click' && !result.ok && !allowUnverifiedRedirect,
+    blocked,
   });
 
+  const redirectCode = !redirectUrl ? (strictTarget.code || 'PDP_URL_REQUIRED') : null;
+  const redirectMessage = !redirectUrl
+    ? '상품 상세 페이지 링크를 확인할 수 없어 이동할 수 없습니다.'
+    : null;
+
   return {
-    ok: !!result.ok,
+    ok: !!result.ok && !!redirectUrl,
     offerId,
     productId: product.id,
     productType,
@@ -1587,9 +1738,9 @@ async function verifyOfferById(offerId, options = {}) {
     verifiedPrice: toNumber(store.verifiedPrice),
     verifiedAt: store.verifiedAt,
     sourceUrl: store.sourceUrl,
-    redirectUrl: (result.ok || allowUnverifiedRedirect) ? (store.affiliateUrl || store.sourceUrl) : null,
-    code: result.ok ? null : store.lastErrorCode,
-    message: result.ok ? null : store.lastErrorMessage,
+    redirectUrl,
+    code: result.ok ? redirectCode : (store.lastErrorCode || redirectCode),
+    message: result.ok ? redirectMessage : (store.lastErrorMessage || redirectMessage),
     degradedRedirect: !result.ok && allowUnverifiedRedirect,
     listedPrice: listedPrice || null,
     listedVerifiedAt,
@@ -1658,6 +1809,7 @@ async function verifyCatalogOffers(productType, options = {}) {
         applyVerificationFailure(store, result);
         summary.failed += 1;
       }
+      ensureStoreOfferMetadata(product, store);
       changed = true;
 
       appendVerificationLog({
@@ -1718,7 +1870,12 @@ function toPublicStore(store, options = {}) {
     : (isIsoDate(store.updatedAt) ? new Date(store.updatedAt).toISOString() : null);
   const matchScore = Number.isFinite(Number(store.matchScore)) ? Math.max(0, Math.min(100, Number(store.matchScore))) : 0;
   const freshUntil = getFreshUntilIso(store.verifiedAt);
-  const canClaimLowest = displayPrice !== null && priceState === 'verified_fresh';
+  const strictTarget = resolveOfferTargetUrl(store, { strict: true });
+  const pdpUrl = strictTarget.url || '';
+  const isPdpUrl = !!pdpUrl;
+  const urlQuality = isPdpUrl ? 'pdp' : getUrlQuality(store.sourceUrl || store.url);
+  const canonicalUrl = canonicalizeUrl(pdpUrl || store.sourceUrl || store.url);
+  const canClaimLowest = displayPrice !== null && priceState === 'verified_fresh' && isPdpUrl;
   const priceToken = canClaimLowest
     ? createPriceToken({
         offerId: store.offerId,
@@ -1726,32 +1883,41 @@ function toPublicStore(store, options = {}) {
         verifiedAt: store.verifiedAt,
       })
     : null;
-  const redirectPath = `/r/${store.offerId}`;
-  const redirectUrl = priceToken
-    ? `${redirectPath}?priceToken=${encodeURIComponent(priceToken)}`
-    : redirectPath;
+  const redirectPath = store.offerId ? `/r/${store.offerId}` : '';
+  const redirectUrl = redirectPath
+    ? (priceToken ? `${redirectPath}?priceToken=${encodeURIComponent(priceToken)}` : redirectPath)
+    : '';
 
   return {
     ...store,
     source,
     collectedAt,
     matchScore,
+    rawPrice: toNumber(store.rawPrice || store.price),
+    raw_price: toNumber(store.rawPrice || store.price),
     displayPrice,
     display_price: displayPrice,
     priceState,
     price_state: priceState,
     freshUntil,
     fresh_until: freshUntil,
+    pdpUrl: pdpUrl || null,
+    pdp_url: pdpUrl || null,
+    canonicalUrl: canonicalUrl || null,
+    canonical_url: canonicalUrl || null,
+    isPdpUrl,
+    urlQuality,
+    url_quality: urlQuality,
     canClaimLowest,
-    clickPolicy: canClaimLowest
-      ? 'recheck_required'
-      : (strictGuard ? 'blocked' : 'recheck_required'),
+    clickPolicy: isPdpUrl ? 'recheck_required' : (strictGuard ? 'blocked' : 'recheck_required'),
     priceToken,
-    price: displayPrice ?? 0,
+    price: displayPrice ?? verifiedPrice ?? 0,
     verifiedPrice,
     verifiedAt: store.verifiedAt || null,
     verificationStatus: normalizeStatus(store.verificationStatus, 'failed'),
     verificationMethod: normalizeMethod(store.verificationMethod, 'fallback'),
+    affiliateUrl: store.affiliateUrl || undefined,
+    resolvedProductUrl: store.resolvedProductUrl || undefined,
     url: redirectUrl,
     sourceUrl: String(store.sourceUrl || ''),
     isLowest: false,
@@ -1800,7 +1966,7 @@ function prepareCatalogForResponse(productType, options = {}) {
     const stores = (normalizedProduct.stores || []).map((store) => toPublicStore(store, { nowMs, strictGuard }));
 
     const visibleStoresRaw = verifiedOnly
-      ? stores.filter((store) => store.canClaimLowest && Number(store.displayPrice) > 0)
+      ? stores.filter((store) => store.priceState === 'verified_fresh' && Number(store.displayPrice) > 0)
       : stores;
 
     if (visibleStoresRaw.length === 0 && verifiedOnly) {
@@ -1809,8 +1975,15 @@ function prepareCatalogForResponse(productType, options = {}) {
 
     const visibleStores = [...visibleStoresRaw];
     visibleStores.sort((a, b) => {
-      const aPrice = Number(a.displayPrice) > 0 ? Number(a.displayPrice) : Number.MAX_SAFE_INTEGER;
-      const bPrice = Number(b.displayPrice) > 0 ? Number(b.displayPrice) : Number.MAX_SAFE_INTEGER;
+      const aFresh = Number(a.displayPrice) > 0;
+      const bFresh = Number(b.displayPrice) > 0;
+      if (aFresh !== bFresh) return aFresh ? -1 : 1;
+      const aPrice = Number(a.displayPrice) > 0
+        ? Number(a.displayPrice)
+        : (Number(a.verifiedPrice) > 0 ? Number(a.verifiedPrice) : (Number(a.rawPrice) > 0 ? Number(a.rawPrice) : Number.MAX_SAFE_INTEGER));
+      const bPrice = Number(b.displayPrice) > 0
+        ? Number(b.displayPrice)
+        : (Number(b.verifiedPrice) > 0 ? Number(b.verifiedPrice) : (Number(b.rawPrice) > 0 ? Number(b.rawPrice) : Number.MAX_SAFE_INTEGER));
       if (aPrice !== bPrice) return aPrice - bPrice;
       return String(a.store || '').localeCompare(String(b.store || ''));
     });
@@ -1988,6 +2161,93 @@ function enqueueBatchVerification(productType, options = {}) {
   });
 }
 
+function saveOfferAffiliateUrl(offerId, affiliateUrl) {
+  if (!offerId || !affiliateUrl) return false;
+  const found = findOfferById(offerId);
+  if (!found) return false;
+  const { productType, catalog, product, store } = found;
+  if (store.affiliateUrl === affiliateUrl) return false;
+  store.affiliateUrl = affiliateUrl;
+  ensureStoreOfferMetadata(product, store);
+  saveCatalogFile(productType, catalog);
+  return true;
+}
+
+async function batchConvertDeeplinks() {
+  let callCoupangDeeplinkApi;
+  try {
+    callCoupangDeeplinkApi = require('../routes/affiliate').callCoupangDeeplinkApi;
+  } catch {
+    console.log('[BatchDeeplink] callCoupangDeeplinkApi를 불러올 수 없어 건너뜁니다.');
+    return { converted: 0, skipped: 0, failed: 0 };
+  }
+
+  if (!process.env.COUPANG_ACCESS_KEY || !process.env.COUPANG_SECRET_KEY) {
+    console.log('[BatchDeeplink] 쿠팡 API 키 미설정, 건너뜁니다.');
+    return { converted: 0, skipped: 0, failed: 0 };
+  }
+
+  const pending = [];
+  for (const productType of PRODUCT_TYPES) {
+    const catalog = readCatalogFile(productType);
+    for (const product of catalog.products || []) {
+      for (const store of product.stores || []) {
+        if (store.affiliateUrl) continue;
+        const sourceUrl = String(store.sourceUrl || store.url || '');
+        if (!sourceUrl || !isCoupangUrl(sourceUrl)) continue;
+        pending.push({ productType, product, store, sourceUrl });
+      }
+    }
+  }
+
+  if (pending.length === 0) {
+    console.log('[BatchDeeplink] 변환 대상 없음 (모두 affiliateUrl 보유)');
+    return { converted: 0, skipped: 0, failed: 0 };
+  }
+
+  console.log(`[BatchDeeplink] 변환 대상 ${pending.length}개 시작`);
+  let converted = 0;
+  let failed = 0;
+
+  for (const item of pending) {
+    try {
+      await delay(1500); // 분당 42회 한도 준수 (60000/42 ≈ 1428ms)
+      const data = await callCoupangDeeplinkApi([item.sourceUrl], 'lapprice_batch');
+      const deeplink = data?.[0];
+      const affiliateUrl = deeplink?.landingUrl;
+      if (affiliateUrl && affiliateUrl !== item.sourceUrl) {
+        item.store.affiliateUrl = affiliateUrl;
+        const catalog = readCatalogFile(item.productType);
+        for (const p of catalog.products || []) {
+          for (const s of p.stores || []) {
+            if (String(s.offerId) === String(item.store.offerId)) {
+              s.affiliateUrl = affiliateUrl;
+            }
+          }
+        }
+        saveCatalogFile(item.productType, catalog);
+        converted++;
+      } else {
+        failed++;
+      }
+    } catch (err) {
+      console.error(`[BatchDeeplink] 변환 실패 (${item.store.offerId}):`, err.message || err);
+      failed++;
+      if (String(err?.statusCode) === '401' || String(err?.message || '').includes('401')) {
+        console.log('[BatchDeeplink] 401 에러, 배치 중단');
+        break;
+      }
+      if (String(err?.statusCode) === '429' || String(err?.message || '').includes('429')) {
+        console.log('[BatchDeeplink] 429 에러, 60초 대기 후 재시도');
+        await delay(60000);
+      }
+    }
+  }
+
+  console.log(`[BatchDeeplink] 완료: 변환 ${converted}개, 실패 ${failed}개, 이미보유 ${pending.length - converted - failed}개`);
+  return { converted, skipped: pending.length - converted - failed, failed };
+}
+
 module.exports = {
   PRODUCT_TYPES,
   ensureVerificationStorage,
@@ -2011,4 +2271,8 @@ module.exports = {
   enqueueOfferVerification,
   enqueueBatchVerification,
   getVerificationMetrics,
+  saveOfferAffiliateUrl,
+  findOfferById,
+  resolveOfferTargetUrl,
+  batchConvertDeeplinks,
 };

@@ -9,9 +9,19 @@ function isCoupangUrl(url: string): boolean {
   return url.includes('coupang.com') || url.includes('link.coupang.com');
 }
 
-async function convertOnClick(url: string): Promise<string> {
+function isAlreadyAffiliateUrl(url: string): boolean {
+  try {
+    const u = new URL(url);
+    return u.hostname === 'link.coupang.com' && u.pathname.startsWith('/re/');
+  } catch {
+    return false;
+  }
+}
+
+async function convertOnClick(url: string, offerId?: string): Promise<string> {
   const target = String(url || '').trim();
   if (!target || !isCoupangUrl(target)) return target;
+  if (isAlreadyAffiliateUrl(target)) return target;
 
   const cacheKey = `${target}:${CLICK_SUB_ID}`;
   if (convertCache.has(cacheKey)) return convertCache.get(cacheKey) || target;
@@ -23,8 +33,10 @@ async function convertOnClick(url: string): Promise<string> {
       const timer = window.setTimeout(() => controller.abort(), 2500);
       let response: Response;
       try {
+        const params = new URLSearchParams({ url: target, subId: CLICK_SUB_ID });
+        if (offerId) params.set('offerId', offerId);
         response = await fetch(
-          `/api/affiliate/convert?url=${encodeURIComponent(target)}&subId=${encodeURIComponent(CLICK_SUB_ID)}`,
+          `/api/affiliate/convert?${params.toString()}`,
           { signal: controller.signal },
         );
       } finally {
@@ -54,7 +66,7 @@ export function useVerifiedRedirect() {
     setRedirectError(null);
   }, []);
 
-  const openVerifiedLink = useCallback(async (href: string) => {
+  const openVerifiedLink = useCallback(async (href: string, offerId?: string) => {
     const target = String(href || '').trim();
     if (!target) {
       setRedirectError(DEFAULT_ERROR);
@@ -64,7 +76,7 @@ export function useVerifiedRedirect() {
     setRedirectError(null);
     const resolvedTarget = target.startsWith('/r/')
       ? target
-      : await convertOnClick(target);
+      : await convertOnClick(target, offerId);
 
     window.location.assign(resolvedTarget);
     return true;

@@ -45,7 +45,7 @@ export default function RecentlyViewed({ items, onNavigateToPage }: RecentlyView
               <div className="min-w-0 text-left">
                 <p className="text-[11px] text-slate-900 font-medium truncate">{item.name}</p>
                 <div className="flex items-center gap-1">
-                  <span className="text-[10px] text-blue-600 font-bold">{item.price.toLocaleString()}원</span>
+                  <span className="text-[10px] text-blue-600 font-bold">{item.price > 0 ? `${item.price.toLocaleString()}원` : '가격 확인 필요'}</span>
                   <span className="text-[9px] text-slate-400">{typeLabels[item.productType]}</span>
                 </div>
               </div>
