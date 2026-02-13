@@ -235,14 +235,8 @@ router.post('/sync', async (req, res) => {
   let authenticated = false;
   if (authHeader && authHeader.startsWith('Bearer ')) {
     const token = authHeader.split(' ')[1];
-    try {
-      // admin.js와 동일한 토큰 검증 로직
-      const decoded = Buffer.from(token, 'base64').toString('utf-8');
-      const parsed = JSON.parse(decoded);
-      if (parsed.role === 'admin' && parsed.exp > Date.now()) {
-        authenticated = true;
-      }
-    } catch { /* invalid token */ }
+    // /api/admin/login returns ADMIN_PASSWORD as the Bearer token.
+    if (token === adminPassword) authenticated = true;
   }
   
   // 레거시: 비밀번호 인증
@@ -311,13 +305,7 @@ router.post('/heal-images', async (req, res) => {
   let authenticated = false;
   if (authHeader && authHeader.startsWith('Bearer ')) {
     const token = authHeader.split(' ')[1];
-    try {
-      const decoded = Buffer.from(token, 'base64').toString('utf-8');
-      const parsed = JSON.parse(decoded);
-      if (parsed.role === 'admin' && parsed.exp > Date.now()) {
-        authenticated = true;
-      }
-    } catch { /* invalid token */ }
+    if (token === adminPassword) authenticated = true;
   }
 
   if (!authenticated && password === adminPassword) {

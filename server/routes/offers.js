@@ -20,15 +20,8 @@ function isAdminAuthenticated(req) {
 
   if (authHeader && authHeader.startsWith('Bearer ')) {
     const token = authHeader.split(' ')[1];
-    try {
-      const decoded = Buffer.from(token, 'base64').toString('utf-8');
-      const parsed = JSON.parse(decoded);
-      if (parsed.role === 'admin' && parsed.exp > Date.now()) {
-        return true;
-      }
-    } catch {
-      // invalid token
-    }
+    // AdminPanel /api/admin/login returns ADMIN_PASSWORD as the Bearer token.
+    if (token === adminPassword) return true;
   }
 
   return password === adminPassword;
